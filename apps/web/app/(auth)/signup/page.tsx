@@ -1,0 +1,179 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { FormEvent, useEffect, useState } from "react";
+import { z } from "zod";
+import { AuthShell, FieldError } from "@/components/auth";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useAuth } from "@/hooks/use-auth";
+
+const signupSchema = z
+  .object({
+    fullName: z.string().trim().min(2, "Full name must be at least 2 characters"),
+    email: z.string().trim().email("Enter a valid email"),
+    password: z
+      .string()
+      .min(8, "Password must be at least 8 characters")
+      .regex(/[A-Z]/, "Password must include at least one uppercase letter")
+      .regex(/[0-9]/, "Password must include at least one number"),
+    confirmPassword: z.string().min(8, "Confirm your password"),
+  })
+  .refine((values) => values.password === values.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+
+type SignupFormData = z.infer<typeof signupSchema>;
+type FormErrors = Partial<Record<keyof SignupFormData, string>>;
+
+export default function SignupPage() {
+  const router = useRouter();
+  const { signup, isAuthenticated, isBootstrapping } = useAuth();
+
+  const [formData, setFormData] = useState<SignupFormData>({
+    fullName: "",
+    email: "",
+    password: "",
+    confirmPassword: "",
+  });
+  const [fieldErrors, setFieldErrors] = useState<FormErrors>({});
+  const [formError, setFormError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isBootstrapping && isAuthenticated) {
+      router.replace("/dashboard");
+    }
+  }, [isAuthenticated, isBootstrapping, router]);
+
+  function validate(data: SignupFormData): FormErrors {
+    const parsed = signupSchema.safeParse(data);
+
+    if (parsed.success) {
+      return {};
+    }
+
+    const errors: FormErrors = {};
+
+    for (const issue of parsed.error.issues) {
+      const key = issue.path[0] as keyof SignupFormData;
+      if (!errors[key]) {
+        errors[key] = issue.message;
+      }
+    }
+
+    return errors;
+  }
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFormError(null);
+
+    const errors = validate(formData);
+    setFieldErrors(errors);
+
+    if (Object.keys(errors).length > 0) {
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      await signup({
+        fullName: formData.fullName,
+        email: formData.email,
+        password: formData.password,
+      });
+
+      router.replace("/dashboard");
+    } catch (error) {
+      setFormError((error as Error).message || "Unable to create account");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <AuthShell
+      title="Create your Malachitex account"
+      subtitle="Start with secure custody, wallet visibility, and P2P-ready workflows."
+      footer={
+        <p>
+          Already registered?{" "}
+          <Link className="text-emerald-300 hover:text-emerald-200" href="/login">
+            Sign in
+          </Link>
+        </p>
+      }
+    >
+      <form className="space-y-4" onSubmit={onSubmit}>
+        <div className="space-y-1.5">
+          <Label htmlFor="fullName">Full name</Label>
+          <Input
+            id="fullName"
+            name="fullName"
+            autoComplete="name"
+            value={formData.fullName}
+            onChange={(event) => setFormData((prev) => ({ ...prev, fullName: event.target.value }))}
+            placeholder="Aarav Sharma"
+          />
+          <FieldError message={fieldErrors.fullName} />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="email">Email</Label>
+          <Input
+            id="email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            value={formData.email}
+            onChange={(event) => setFormData((prev) => ({ ...prev, email: event.target.value }))}
+            placeholder="trader@example.com"
+          />
+          <FieldError message={fieldErrors.email} />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="password">Password</Label>
+          <Input
+            id="password"
+            name="password"
+            type="password"
+            autoComplete="new-password"
+            value={formData.password}
+            onChange={(event) => setFormData((prev) => ({ ...prev, password: event.target.value }))}
+            placeholder="Use at least 8 characters"
+          />
+          <FieldError message={fieldErrors.password} />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="confirmPassword">Confirm password</Label>
+          <Input
+            id="confirmPassword"
+            name="confirmPassword"
+            type="password"
+            autoComplete="new-password"
+            value={formData.confirmPassword}
+            onChange={(event) =>
+              setFormData((prev) => ({ ...prev, confirmPassword: event.target.value }))
+            }
+            placeholder="Re-enter your password"
+          />
+          <FieldError message={fieldErrors.confirmPassword} />
+        </div>
+
+        {formError ? <Alert variant="error">{formError}</Alert> : null}
+
+        <Button className="w-full" type="submit" disabled={loading}>
+          {loading ? "Creating account..." : "Create account"}
+        </Button>
+      </form>
+    </AuthShell>
+  );
+}

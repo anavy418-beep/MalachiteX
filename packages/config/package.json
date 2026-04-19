@@ -1,0 +1,10 @@
+{
+  "name": "@p2p/config",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "tsconfig.base.json",
+    "tsconfig.next.json",
+    "tsconfig.nest.json"
+  ]
+}

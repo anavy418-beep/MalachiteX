@@ -1,0 +1,12 @@
+{
+  "extends": "../../packages/config/tsconfig.nest.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@p2p/types": ["../../packages/types/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "prisma/**/*.ts", "test/**/*.ts"]
+}

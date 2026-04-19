@@ -1,0 +1,310 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum OfferType {
+  BUY
+  SELL
+}
+
+enum OfferStatus {
+  ACTIVE
+  PAUSED
+  CLOSED
+}
+
+enum TradeStatus {
+  PENDING_PAYMENT
+  PAID
+  RELEASED
+  CANCELED
+  DISPUTED
+}
+
+enum LedgerEntryType {
+  DEPOSIT
+  WITHDRAWAL_REQUEST
+  WITHDRAWAL_APPROVED
+  WITHDRAWAL_REJECTED
+  TRADE_ESCROW_HOLD
+  TRADE_ESCROW_RELEASE
+  TRADE_ESCROW_REFUND
+  ADJUSTMENT
+}
+
+enum NotificationType {
+  SYSTEM
+  TRADE
+  DISPUTE
+  WALLET
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  REJECTED
+}
+
+enum WithdrawalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum DepositStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
+model User {
+  id                  String               @id @default(uuid())
+  email               String               @unique
+  username            String               @unique
+  passwordHash        String
+  role                Role                 @default(USER)
+  isEmailVerified     Boolean              @default(false)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  wallet              Wallet?
+  offers              Offer[]
+  tradesAsBuyer       Trade[]              @relation("TradeBuyer")
+  tradesAsSeller      Trade[]              @relation("TradeSeller")
+  messages            TradeMessage[]
+  openedDisputes      Dispute[]            @relation("DisputeOpenedBy")
+  resolvedDisputes    Dispute[]            @relation("DisputeResolvedBy")
+  auditLogs           AuditLog[]           @relation("AuditActor")
+  notifications       Notification[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  withdrawalRequests  WithdrawalRequest[]  @relation("WithdrawalOwner")
+  reviewedWithdrawals WithdrawalRequest[]  @relation("WithdrawalReviewer")
+  deposits            Deposit[]
+  ledgerEntries       LedgerEntry[]
+  tradeEscrowEvents   TradeEscrowEvent[]   @relation("EscrowEventActor")
+}
+
+model Wallet {
+  id                   String              @id @default(uuid())
+  userId               String              @unique
+  user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currency             String
+  availableBalanceMinor BigInt             @default(0)
+  escrowBalanceMinor   BigInt              @default(0)
+  ledgerEntries        LedgerEntry[]
+  withdrawalRequests   WithdrawalRequest[]
+  deposits             Deposit[]
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+}
+
+model LedgerEntry {
+  id                        String          @id @default(uuid())
+  walletId                  String
+  userId                    String
+  wallet                     Wallet          @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  user                       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type                      LedgerEntryType
+  availableDeltaMinor       BigInt
+  escrowDeltaMinor          BigInt
+  balanceAfterAvailableMinor BigInt
+  balanceAfterEscrowMinor   BigInt
+  referenceType             String?
+  referenceId               String?
+  metadata                  Json?
+  createdAt                 DateTime        @default(now())
+
+  @@index([walletId, createdAt])
+}
+
+model Offer {
+  id             String      @id @default(uuid())
+  userId         String
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type           OfferType
+  status         OfferStatus @default(ACTIVE)
+  asset          String
+  fiatCurrency   String
+  priceMinor     BigInt
+  minAmountMinor BigInt
+  maxAmountMinor BigInt
+  paymentMethod  String
+  terms          String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  trades         Trade[]
+
+  @@index([status, createdAt])
+}
+
+model Trade {
+  id              String            @id @default(uuid())
+  offerId          String
+  offer            Offer             @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  buyerId          String
+  buyer            User              @relation("TradeBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  sellerId         String
+  seller           User              @relation("TradeSeller", fields: [sellerId], references: [id], onDelete: Restrict)
+  amountMinor      BigInt
+  fiatPriceMinor   BigInt
+  fiatTotalMinor   BigInt
+  escrowHeldMinor  BigInt
+  status           TradeStatus       @default(PENDING_PAYMENT)
+  openedAt         DateTime          @default(now())
+  paidAt           DateTime?
+  releasedAt       DateTime?
+  completedAt      DateTime?
+  canceledAt       DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  messages         TradeMessage[]
+  dispute          Dispute?
+  escrowEvents     TradeEscrowEvent[]
+
+  @@index([buyerId, status])
+  @@index([sellerId, status])
+}
+
+model TradeMessage {
+  id            String   @id @default(uuid())
+  tradeId        String
+  trade          Trade    @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  body           String
+  attachmentKey  String?
+  createdAt      DateTime @default(now())
+
+  @@index([tradeId, createdAt])
+}
+
+model Dispute {
+  id             String        @id @default(uuid())
+  tradeId         String        @unique
+  trade           Trade         @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  openedById      String
+  openedBy        User          @relation("DisputeOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
+  reason          String
+  evidenceKeys    String[]
+  status          DisputeStatus @default(OPEN)
+  resolutionNote  String?
+  resolvedById    String?
+  resolvedBy      User?         @relation("DisputeResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolvedAt      DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String
+  entityId   String?
+  ipAddress  String?
+  userAgent  String?
+  payload    Json?
+  createdAt  DateTime @default(now())
+
+  @@index([action, createdAt])
+  @@index([entityType, entityId])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  message   String
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, readAt, createdAt])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model WithdrawalRequest {
+  id           String           @id @default(uuid())
+  walletId      String
+  wallet        Wallet           @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User             @relation("WithdrawalOwner", fields: [userId], references: [id], onDelete: Cascade)
+  amountMinor   BigInt
+  destination   String
+  status        WithdrawalStatus @default(PENDING)
+  reviewedById  String?
+  reviewedBy    User?            @relation("WithdrawalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt    DateTime?
+  reason        String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model Deposit {
+  id          String        @id @default(uuid())
+  walletId     String
+  wallet       Wallet        @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amountMinor  BigInt
+  txRef        String        @unique
+  status       DepositStatus @default(PENDING)
+  confirmedAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+model TradeEscrowEvent {
+  id         String   @id @default(uuid())
+  tradeId     String
+  trade       Trade    @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  action      String
+  amountMinor BigInt
+  actorId     String?
+  actor       User?    @relation("EscrowEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([tradeId, createdAt])
+}

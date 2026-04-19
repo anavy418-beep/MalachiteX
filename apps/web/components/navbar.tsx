@@ -1,0 +1,98 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { Gem, LogOut, UserCircle2 } from "lucide-react";
+import { useState } from "react";
+import { useAuth } from "@/hooks/use-auth";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+
+const navLinks = [
+  { href: "/", label: "Home" },
+  { href: "/wallet", label: "Wallet" },
+  { href: "/offers", label: "P2P" },
+  { href: "/dashboard", label: "Dashboard" },
+];
+
+export function Navbar() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { user, isAuthenticated, isBootstrapping, logout } = useAuth();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    setIsLoggingOut(true);
+
+    try {
+      await logout();
+      router.push("/login");
+      router.refresh();
+    } finally {
+      setIsLoggingOut(false);
+    }
+  }
+
+  return (
+    <header className="sticky top-0 z-40 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur">
+      <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4">
+        <Link href="/" className="inline-flex items-center gap-2 font-semibold text-slate-100">
+          <span className="rounded-md bg-emerald-600/90 p-1 text-white">
+            <Gem className="h-4 w-4" />
+          </span>
+          Malachitex
+        </Link>
+
+        <nav className="hidden items-center gap-1 md:flex">
+          {navLinks.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              className={cn(
+                "rounded-md px-3 py-2 text-sm transition-colors",
+                (link.href === "/" ? pathname === "/" : pathname.startsWith(link.href))
+                  ? "bg-emerald-950/70 text-emerald-200"
+                  : "text-slate-300 hover:bg-zinc-800 hover:text-white",
+              )}
+            >
+              {link.label}
+            </Link>
+          ))}
+        </nav>
+
+        <div className="flex items-center gap-2">
+          {isBootstrapping ? (
+            <span className="rounded-md border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-slate-400">
+              Checking session...
+            </span>
+          ) : isAuthenticated && user ? (
+            <>
+              <div className="hidden items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/70 px-3 py-1.5 md:flex">
+                <UserCircle2 className="h-4 w-4 text-emerald-300" />
+                <div className="text-xs">
+                  <p className="font-medium text-slate-100">{user.username}</p>
+                  <p className="text-slate-400">{user.email}</p>
+                </div>
+              </div>
+              <Button variant="outline" size="sm" onClick={handleLogout} disabled={isLoggingOut}>
+                <LogOut className="mr-2 h-4 w-4" />
+                {isLoggingOut ? "Logging out..." : "Logout"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Link href="/login">
+                <Button variant="ghost" size="sm">
+                  Login
+                </Button>
+              </Link>
+              <Link href="/signup">
+                <Button size="sm">Sign up</Button>
+              </Link>
+            </>
+          )}
+        </div>
+      </div>
+    </header>
+  );
+}
