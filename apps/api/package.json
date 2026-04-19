@@ -6,6 +6,7 @@
     "dev": "nest start --watch",
     "start": "node dist/src/main.js",
     "start:dev": "nest start --watch",
+    "prebuild": "pnpm prisma:generate",
     "build": "nest build",
     "lint": "echo \"No lint configured for api yet\"",
     "test": "jest",
