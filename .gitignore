@@ -10,3 +10,4 @@ coverage
 .prisma
 tmp
 uploads
+.turbo
