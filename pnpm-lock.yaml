@@ -150,12 +150,6 @@ importers:
 
   apps/web:
     dependencies:
-      '@p2p/types':
-        specifier: workspace:*
-        version: link:../../packages/types
-      '@p2p/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
       axios:
         specifier: ^1.7.7
         version: 1.15.0
