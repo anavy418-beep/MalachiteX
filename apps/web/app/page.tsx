@@ -1,10 +1,10 @@
-import Link from "next/link";
+﻿import Link from "next/link";
 import { ArrowRight, LockKeyhole, ShieldCheck, WalletCards } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 const demoMarketRows = [
-  { pair: "USDT/INR", price: "₹83.21", change: "+1.24%" },
+  { pair: "USDT/INR", price: "INR 83.21", change: "+1.24%" },
   { pair: "BTC/USDT", price: "$68,420", change: "+0.68%" },
   { pair: "ETH/USDT", price: "$3,550", change: "+1.02%" },
   { pair: "SOL/USDT", price: "$158.77", change: "-0.41%" },

@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { ArrowUpFromLine, Clock3 } from "lucide-react";
 import { tokenStore } from "@/lib/api";
+import { DEMO_WITHDRAWALS } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import { walletService, type WithdrawalRecord } from "@/services/wallet.service";
 import { Alert } from "@/components/ui/alert";
@@ -10,23 +11,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-
-const DEMO_WITHDRAWALS: WithdrawalRecord[] = [
-  {
-    id: "w1",
-    amountMinor: "250000",
-    destination: "UPI: trader@bank",
-    status: "PENDING",
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: "w2",
-    amountMinor: "125000",
-    destination: "Bank: XXXX9821",
-    status: "APPROVED",
-    createdAt: new Date().toISOString(),
-  },
-];
 
 function statusBadge(status: string) {
   const normalized = status.toUpperCase();
@@ -52,12 +36,14 @@ export default function WalletWithdrawPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [isDemo, setIsDemo] = useState(false);
 
   async function loadRecords() {
     const token = tokenStore.accessToken;
 
     if (!token) {
       setRecords(DEMO_WITHDRAWALS);
+      setIsDemo(true);
       setError("Session token missing. Showing demo withdrawal data.");
       setLoading(false);
       return;
@@ -65,10 +51,17 @@ export default function WalletWithdrawPage() {
 
     try {
       const payload = await walletService.listWithdrawals(token);
-      setRecords(payload);
+      if (payload.length === 0) {
+        setRecords(DEMO_WITHDRAWALS);
+        setIsDemo(true);
+      } else {
+        setRecords(payload);
+        setIsDemo(false);
+      }
       setError(null);
     } catch (err) {
       setRecords(DEMO_WITHDRAWALS);
+      setIsDemo(true);
       setError((err as Error).message);
     } finally {
       setLoading(false);
@@ -192,6 +185,9 @@ export default function WalletWithdrawPage() {
           ) : null}
         </CardContent>
       </Card>
+      {isDemo ? (
+        <p className="text-xs text-amber-300/80">Showing demo withdrawal records for staging walkthrough.</p>
+      ) : null}
     </section>
   );
 }

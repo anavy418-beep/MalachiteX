@@ -3,10 +3,16 @@ import { Throttle } from "@nestjs/throttler";
 import { CurrentUser, RequestUser } from "@/common/decorators/current-user.decorator";
 import { TradesService } from "./trades.service";
 import { CreateTradeDto } from "./dto/create-trade.dto";
+import { OpenTradeDisputeDto } from "./dto/open-trade-dispute.dto";
 
 @Controller("trades")
 export class TradesController {
   constructor(private readonly tradesService: TradesService) {}
+
+  @Get()
+  listMine(@CurrentUser() user: RequestUser) {
+    return this.tradesService.listForUser(user.userId, user.role);
+  }
 
   @Post()
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
@@ -35,5 +41,15 @@ export class TradesController {
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   cancel(@CurrentUser() user: RequestUser, @Param("id") id: string) {
     return this.tradesService.cancelTrade(user.userId, id);
+  }
+
+  @Post(":id/dispute")
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  dispute(
+    @CurrentUser() user: RequestUser,
+    @Param("id") id: string,
+    @Body() dto: OpenTradeDisputeDto,
+  ) {
+    return this.tradesService.openDispute(user.userId, id, dto.reason);
   }
 }

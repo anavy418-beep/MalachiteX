@@ -14,6 +14,8 @@ export const AUTH_ROUTE_PATHS = [
 export const PROTECTED_ROUTE_PREFIXES = [
   "/dashboard",
   "/wallet",
+  "/p2p",
+  "/offers",
   "/trades",
   "/deposits",
   "/withdrawals",

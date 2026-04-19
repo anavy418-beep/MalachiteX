@@ -2,35 +2,37 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDownToLine, ArrowUpFromLine, Clock3, History, WalletCards } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, Clock3, History, QrCode } from "lucide-react";
 import { tokenStore } from "@/lib/api";
+import { DEMO_WALLET_SUMMARY } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
+import {
+  getWalletNetworkLabel,
+  resolveWalletIdentity,
+  type WalletNetwork,
+} from "@/lib/wallet-identity";
 import { walletService, type WalletSummary } from "@/services/wallet.service";
+import { AddressQrModal } from "@/components/wallet/address-qr-modal";
+import { CopyableValueRow } from "@/components/wallet/copyable-value-row";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-const DEMO_WALLET: WalletSummary = {
-  currency: "INR",
-  availableBalanceMinor: "2450000",
-  escrowBalanceMinor: "375000",
-  ledger: [
-    { id: "l1", type: "DEPOSIT", amountMinor: "1200000", createdAt: new Date().toISOString() },
-    { id: "l2", type: "WITHDRAWAL_REQUEST", amountMinor: "-350000", createdAt: new Date().toISOString() },
-    { id: "l3", type: "TRADE_ESCROW_HOLD", amountMinor: "-125000", createdAt: new Date().toISOString() },
-  ],
-};
+const NETWORKS: WalletNetwork[] = ["ERC20", "TRC20", "BTC"];
 
 export default function WalletPage() {
   const [wallet, setWallet] = useState<WalletSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isDemo, setIsDemo] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [showQr, setShowQr] = useState(false);
+  const [selectedNetwork, setSelectedNetwork] = useState<WalletNetwork>("ERC20");
 
   useEffect(() => {
     (async () => {
       const token = tokenStore.accessToken;
       if (!token) {
-        setWallet(DEMO_WALLET);
+        setWallet(DEMO_WALLET_SUMMARY);
         setIsDemo(true);
         setError("Session token missing. Showing demo wallet preview.");
         setLoading(false);
@@ -39,9 +41,17 @@ export default function WalletPage() {
 
       try {
         const payload = await walletService.getWallet(token);
-        setWallet(payload);
+        const hasLiveBalance =
+          BigInt(payload.availableBalanceMinor || "0") > 0n || BigInt(payload.escrowBalanceMinor || "0") > 0n;
+
+        if (payload.ledger.length === 0 && !hasLiveBalance) {
+          setWallet(DEMO_WALLET_SUMMARY);
+          setIsDemo(true);
+        } else {
+          setWallet(payload);
+        }
       } catch (err) {
-        setWallet(DEMO_WALLET);
+        setWallet(DEMO_WALLET_SUMMARY);
         setIsDemo(true);
         setError((err as Error).message);
       } finally {
@@ -50,10 +60,19 @@ export default function WalletPage() {
     })();
   }, []);
 
-  const current = wallet ?? DEMO_WALLET;
+  const current = wallet ?? DEMO_WALLET_SUMMARY;
   const available = BigInt(current.availableBalanceMinor || "0");
   const escrow = BigInt(current.escrowBalanceMinor || "0");
   const total = available + escrow;
+  const selectedAsset = selectedNetwork === "BTC" ? "BTC" : "USDT";
+  const identity = resolveWalletIdentity({
+    walletId: current.walletId,
+    currency: current.currency,
+    depositAddresses: current.depositAddresses,
+    seedHint: "malachitex:wallet:primary",
+    selectedNetwork,
+  });
+  const activeAddress = identity.addresses[selectedNetwork];
 
   const assetRows = useMemo(
     () => [
@@ -70,32 +89,52 @@ export default function WalletPage() {
     [current.currency, total, available, escrow],
   );
 
+  async function copyText(value: string, field: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedField(field);
+      setTimeout(() => setCopiedField((prev) => (prev === field ? null : prev)), 1800);
+    } catch {
+      setError("Clipboard copy failed. Please copy manually.");
+    }
+  }
+
   return (
     <section className="space-y-6">
       <header className="space-y-2">
         <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Malachitex Wallet</p>
         <h1 className="text-3xl font-semibold text-white">Wallet Overview</h1>
-        <p className="text-sm text-slate-400">Portfolio balances, quick actions, and ledger visibility.</p>
+        <p className="text-sm text-slate-400">Portfolio balances, deposit identity, and ledger visibility.</p>
       </header>
 
       {error ? (
         <Card className="border-amber-500/30 bg-amber-950/20">
           <CardContent className="pt-6">
             <p className="text-sm text-amber-200">
-              Live wallet data is unavailable. Showing safe demo data for preview.
+              Live wallet data is unavailable. Showing stable demo wallet data.
             </p>
             <p className="mt-1 text-xs text-amber-300/80">{error}</p>
           </CardContent>
         </Card>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
+      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr_1fr]">
+        <Card className="border-emerald-800/40 bg-gradient-to-br from-emerald-950/40 via-zinc-950 to-zinc-900">
           <CardHeader className="pb-2">
-            <CardDescription>Total Balance</CardDescription>
+            <CardDescription>Total Portfolio Value</CardDescription>
+            <CardTitle className="text-3xl text-white">{formatMinorUnits(total.toString(), current.currency)}</CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-semibold text-white">{formatMinorUnits(total.toString(), current.currency)}</p>
+          <CardContent className="grid gap-2 text-sm text-slate-300 sm:grid-cols-2">
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Available</p>
+              <p className="mt-1 font-semibold text-emerald-300">
+                {formatMinorUnits(available.toString(), current.currency)}
+              </p>
+            </div>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Escrow</p>
+              <p className="mt-1 font-semibold text-lime-300">{formatMinorUnits(escrow.toString(), current.currency)}</p>
+            </div>
           </CardContent>
         </Card>
 
@@ -112,13 +151,79 @@ export default function WalletPage() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Locked Balance</CardDescription>
+            <CardDescription>Escrow Balance</CardDescription>
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-semibold text-lime-300">{formatMinorUnits(escrow.toString(), current.currency)}</p>
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Wallet Identity</CardTitle>
+          <CardDescription>Deterministic wallet ID and deposit addresses for demo and live fallback.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+            <p className="text-xs uppercase tracking-wide text-slate-400">Wallet ID</p>
+            <CopyableValueRow
+              className="mt-1 flex items-center justify-between gap-3"
+              value={identity.walletId}
+              copied={copiedField === "wallet-id"}
+              onCopy={() => void copyText(identity.walletId, "wallet-id")}
+            />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-[220px_1fr]">
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-wide text-slate-400">Network</p>
+              <div className="grid gap-2">
+                {NETWORKS.map((network) => (
+                  <button
+                    key={network}
+                    onClick={() => setSelectedNetwork(network)}
+                    className={`rounded-lg border px-3 py-2 text-left text-sm transition ${
+                      selectedNetwork === network
+                        ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-200"
+                        : "border-zinc-700 bg-zinc-950 text-slate-300 hover:border-zinc-600"
+                    }`}
+                  >
+                    {getWalletNetworkLabel(network)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs uppercase tracking-wide text-slate-400">Deposit Address</p>
+                <span className="rounded-full border border-emerald-700/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200">
+                  {selectedAsset} · {getWalletNetworkLabel(selectedNetwork)}
+                </span>
+              </div>
+              <CopyableValueRow
+                className="flex flex-wrap items-center justify-between gap-3"
+                value={activeAddress}
+                copied={copiedField === "deposit-address"}
+                onCopy={() => void copyText(activeAddress, "deposit-address")}
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" className="gap-1.5" onClick={() => setShowQr(true)}>
+                  <QrCode className="h-3.5 w-3.5" />
+                  Show QR
+                </Button>
+                <Link href="/wallet/deposit">
+                  <Button size="sm" variant="outline" className="gap-1.5">
+                    <ArrowDownToLine className="h-3.5 w-3.5" />
+                    Open Deposit Page
+                  </Button>
+                </Link>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -206,6 +311,13 @@ export default function WalletPage() {
 
       {loading ? <p className="text-xs text-slate-500">Refreshing wallet data...</p> : null}
       {isDemo ? <p className="text-xs text-amber-300/80">Demo mode enabled for wallet preview.</p> : null}
+
+      <AddressQrModal
+        open={showQr}
+        onClose={() => setShowQr(false)}
+        address={activeAddress}
+        networkLabel={getWalletNetworkLabel(selectedNetwork)}
+      />
     </section>
   );
 }

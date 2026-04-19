@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Clock3, Filter } from "lucide-react";
 import { tokenStore } from "@/lib/api";
+import { DEMO_DEPOSITS, DEMO_WALLET_SUMMARY, DEMO_WITHDRAWALS } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import {
   walletService,
@@ -25,24 +26,6 @@ interface UnifiedHistoryItem {
   createdAt: string;
   detail?: string;
 }
-
-const DEMO_WALLET: WalletSummary = {
-  currency: "INR",
-  availableBalanceMinor: "2450000",
-  escrowBalanceMinor: "375000",
-  ledger: [
-    { id: "l1", type: "DEPOSIT", amountMinor: "1200000", createdAt: new Date().toISOString() },
-    { id: "l2", type: "WITHDRAWAL_REQUEST", amountMinor: "-350000", createdAt: new Date().toISOString() },
-  ],
-};
-
-const DEMO_DEPOSITS: DepositRecord[] = [
-  { id: "d1", amountMinor: "500000", txRef: "MX-DEMO-9182", status: "CONFIRMED", createdAt: new Date().toISOString() },
-];
-
-const DEMO_WITHDRAWALS: WithdrawalRecord[] = [
-  { id: "w1", amountMinor: "250000", destination: "UPI: trader@bank", status: "PENDING", createdAt: new Date().toISOString() },
-];
 
 function buildHistory(
   ledger: WalletLedgerItem[],
@@ -109,8 +92,8 @@ export default function WalletHistoryPage() {
       const token = tokenStore.accessToken;
 
       if (!token) {
-        setCurrency(DEMO_WALLET.currency);
-        setHistory(buildHistory(DEMO_WALLET.ledger, DEMO_DEPOSITS, DEMO_WITHDRAWALS));
+        setCurrency(DEMO_WALLET_SUMMARY.currency);
+        setHistory(buildHistory(DEMO_WALLET_SUMMARY.ledger, DEMO_DEPOSITS, DEMO_WITHDRAWALS));
         setError("Session token missing. Showing demo history.");
         setLoading(false);
         return;
@@ -123,12 +106,20 @@ export default function WalletHistoryPage() {
           walletService.listWithdrawals(token),
         ]);
 
-        setCurrency(wallet.currency);
-        setHistory(buildHistory(wallet.ledger, deposits, withdrawals));
+        const hasAnyHistory =
+          wallet.ledger.length > 0 || deposits.length > 0 || withdrawals.length > 0;
+
+        if (hasAnyHistory) {
+          setCurrency(wallet.currency);
+          setHistory(buildHistory(wallet.ledger, deposits, withdrawals));
+        } else {
+          setCurrency(DEMO_WALLET_SUMMARY.currency);
+          setHistory(buildHistory(DEMO_WALLET_SUMMARY.ledger, DEMO_DEPOSITS, DEMO_WITHDRAWALS));
+        }
         setError(null);
       } catch (err) {
-        setCurrency(DEMO_WALLET.currency);
-        setHistory(buildHistory(DEMO_WALLET.ledger, DEMO_DEPOSITS, DEMO_WITHDRAWALS));
+        setCurrency(DEMO_WALLET_SUMMARY.currency);
+        setHistory(buildHistory(DEMO_WALLET_SUMMARY.ledger, DEMO_DEPOSITS, DEMO_WITHDRAWALS));
         setError((err as Error).message);
       } finally {
         setLoading(false);

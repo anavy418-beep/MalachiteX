@@ -3,7 +3,13 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { NotificationType, OfferStatus, OfferType, TradeStatus } from "@prisma/client";
+import {
+  DisputeStatus,
+  NotificationType,
+  OfferStatus,
+  OfferType,
+  TradeStatus,
+} from "@prisma/client";
 import { PrismaService } from "@/common/prisma/prisma.service";
 import { AuditService } from "@/modules/audit/audit.service";
 import { NotificationsService } from "@/modules/notifications/notifications.service";
@@ -20,6 +26,65 @@ export class TradesService {
     private readonly notificationsService: NotificationsService,
     private readonly tradeGateway: TradeGateway,
   ) {}
+
+  private isPaymentPendingStatus(status: TradeStatus): boolean {
+    const paymentPendingStates: TradeStatus[] = [
+      TradeStatus.OPEN,
+      TradeStatus.PAYMENT_PENDING,
+      TradeStatus.PENDING_PAYMENT,
+    ];
+    return paymentPendingStates.includes(status);
+  }
+
+  private isPaymentSentStatus(status: TradeStatus): boolean {
+    const paymentSentStates: TradeStatus[] = [
+      TradeStatus.PAYMENT_SENT,
+      TradeStatus.PAID,
+      TradeStatus.RELEASE_PENDING,
+    ];
+    return paymentSentStates.includes(status);
+  }
+
+  private isCompletedStatus(status: TradeStatus): boolean {
+    const completedStates: TradeStatus[] = [TradeStatus.COMPLETED, TradeStatus.RELEASED];
+    return completedStates.includes(status);
+  }
+
+  private isCancelledStatus(status: TradeStatus): boolean {
+    const cancelledStates: TradeStatus[] = [TradeStatus.CANCELLED, TradeStatus.CANCELED];
+    return cancelledStates.includes(status);
+  }
+
+  async listForUser(userId: string, role: "USER" | "ADMIN") {
+    const trades = await this.prisma.trade.findMany({
+      where:
+        role === "ADMIN"
+          ? undefined
+          : {
+              OR: [{ buyerId: userId }, { sellerId: userId }],
+            },
+      include: {
+        offer: {
+          select: {
+            id: true,
+            asset: true,
+            fiatCurrency: true,
+            paymentMethod: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
+
+    return trades.map((trade) => ({
+      ...trade,
+      amountMinor: trade.amountMinor.toString(),
+      fiatPriceMinor: trade.fiatPriceMinor.toString(),
+      fiatTotalMinor: trade.fiatTotalMinor.toString(),
+      escrowHeldMinor: trade.escrowHeldMinor.toString(),
+    }));
+  }
 
   async create(actorId: string, dto: CreateTradeDto) {
     const offer = await this.prisma.offer.findUnique({ where: { id: dto.offerId } });
@@ -61,7 +126,7 @@ export class TradesService {
           amountMinor,
           fiatPriceMinor: offer.priceMinor,
           fiatTotalMinor: (offer.priceMinor * amountMinor) / BigInt(100),
-          status: TradeStatus.PENDING_PAYMENT,
+          status: TradeStatus.OPEN,
           escrowHeldMinor: amountMinor,
         },
       });
@@ -106,7 +171,7 @@ export class TradesService {
         userId: buyerId,
         type: NotificationType.TRADE,
         title: "Trade started",
-        message: `Trade ${trade.id} opened`,
+        message: `Trade ${trade.id} opened and awaiting payment`,
       }),
       this.notificationsService.create({
         userId: sellerId,
@@ -134,6 +199,17 @@ export class TradesService {
     const trade = await this.prisma.trade.findUnique({
       where: { id },
       include: {
+        offer: {
+          select: {
+            id: true,
+            asset: true,
+            fiatCurrency: true,
+            paymentMethod: true,
+            terms: true,
+            minAmountMinor: true,
+            maxAmountMinor: true,
+          },
+        },
         messages: {
           orderBy: { createdAt: "asc" },
           take: 200,
@@ -151,6 +227,13 @@ export class TradesService {
 
     return {
       ...trade,
+      offer: trade.offer
+        ? {
+            ...trade.offer,
+            minAmountMinor: trade.offer.minAmountMinor.toString(),
+            maxAmountMinor: trade.offer.maxAmountMinor.toString(),
+          }
+        : undefined,
       amountMinor: trade.amountMinor.toString(),
       fiatPriceMinor: trade.fiatPriceMinor.toString(),
       fiatTotalMinor: trade.fiatTotalMinor.toString(),
@@ -170,15 +253,15 @@ export class TradesService {
       throw new BadRequestException("Only buyer can mark trade as paid");
     }
 
-    if (trade.status !== TradeStatus.PENDING_PAYMENT) {
-      throw new BadRequestException("Trade is not awaiting payment");
+    if (!this.isPaymentPendingStatus(trade.status)) {
+      throw new BadRequestException("Trade is not in a payable state");
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const result = await tx.trade.update({
         where: { id: tradeId },
         data: {
-          status: TradeStatus.PAID,
+          status: TradeStatus.PAYMENT_SENT,
           paidAt: new Date(),
         },
       });
@@ -204,7 +287,7 @@ export class TradesService {
     });
 
     this.tradeGateway.notifyTradeStatus(trade.id, {
-      status: TradeStatus.PAID,
+      status: TradeStatus.PAYMENT_SENT,
       event: "marked_paid",
     });
 
@@ -222,7 +305,11 @@ export class TradesService {
       throw new BadRequestException("Only seller or admin can release escrow");
     }
 
-    if (trade.status !== TradeStatus.PAID && trade.status !== TradeStatus.DISPUTED) {
+    if (trade.status === TradeStatus.DISPUTED) {
+      throw new BadRequestException("Disputed trades must be resolved through dispute workflow");
+    }
+
+    if (!this.isPaymentSentStatus(trade.status)) {
       throw new BadRequestException("Trade not eligible for release");
     }
 
@@ -234,10 +321,17 @@ export class TradesService {
     }
 
     const released = await this.prisma.$transaction(async (tx) => {
+      await tx.trade.update({
+        where: { id: trade.id },
+        data: {
+          status: TradeStatus.RELEASE_PENDING,
+        },
+      });
+
       const updated = await tx.trade.update({
         where: { id: trade.id },
         data: {
-          status: TradeStatus.RELEASED,
+          status: TradeStatus.COMPLETED,
           releasedAt: new Date(),
           completedAt: new Date(),
         },
@@ -290,7 +384,7 @@ export class TradesService {
     ]);
 
     this.tradeGateway.notifyTradeStatus(trade.id, {
-      status: TradeStatus.RELEASED,
+      status: TradeStatus.COMPLETED,
       event: "released",
     });
 
@@ -308,8 +402,20 @@ export class TradesService {
       throw new BadRequestException("Only participants can cancel this trade");
     }
 
-    if (trade.status !== TradeStatus.PENDING_PAYMENT) {
-      throw new BadRequestException("Trade can only be canceled before payment");
+    if (this.isCompletedStatus(trade.status)) {
+      throw new BadRequestException("Completed trades cannot be canceled");
+    }
+
+    if (this.isCancelledStatus(trade.status)) {
+      throw new BadRequestException("Trade is already canceled");
+    }
+
+    if (trade.status === TradeStatus.DISPUTED) {
+      throw new BadRequestException("Disputed trades require dispute resolution");
+    }
+
+    if (!this.isPaymentPendingStatus(trade.status)) {
+      throw new BadRequestException("Trade can only be canceled before payment is marked");
     }
 
     const sellerWallet = await this.prisma.wallet.findUnique({ where: { userId: trade.sellerId } });
@@ -321,7 +427,7 @@ export class TradesService {
       const updated = await tx.trade.update({
         where: { id: trade.id },
         data: {
-          status: TradeStatus.CANCELED,
+          status: TradeStatus.CANCELLED,
           canceledAt: new Date(),
         },
       });
@@ -355,12 +461,112 @@ export class TradesService {
       return updated;
     });
 
+    await Promise.all([
+      this.notificationsService.create({
+        userId: trade.buyerId,
+        type: NotificationType.TRADE,
+        title: "Trade canceled",
+        message: `Trade ${trade.id} was canceled and escrow refunded`,
+      }),
+      this.notificationsService.create({
+        userId: trade.sellerId,
+        type: NotificationType.TRADE,
+        title: "Trade canceled",
+        message: `Trade ${trade.id} was canceled and escrow refunded`,
+      }),
+    ]);
+
     this.tradeGateway.notifyTradeStatus(trade.id, {
-      status: TradeStatus.CANCELED,
+      status: TradeStatus.CANCELLED,
       event: "canceled",
     });
 
     return canceled;
+  }
+
+  async openDispute(actorId: string, tradeId: string, reason?: string) {
+    const trade = await this.prisma.trade.findUnique({
+      where: { id: tradeId },
+      include: { dispute: true },
+    });
+
+    if (!trade) {
+      throw new NotFoundException("Trade not found");
+    }
+
+    if (![trade.buyerId, trade.sellerId].includes(actorId)) {
+      throw new BadRequestException("Only trade participants can open dispute");
+    }
+
+    if (trade.dispute) {
+      throw new BadRequestException("Dispute already exists for this trade");
+    }
+
+    if (trade.status === TradeStatus.DISPUTED) {
+      throw new BadRequestException("Trade is already disputed");
+    }
+
+    if (this.isCompletedStatus(trade.status) || this.isCancelledStatus(trade.status)) {
+      throw new BadRequestException("Dispute cannot be opened for closed trades");
+    }
+
+    const disputeReason = reason?.trim() || "Dispute opened from trade workspace.";
+
+    const dispute = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.dispute.create({
+        data: {
+          tradeId: trade.id,
+          openedById: actorId,
+          reason: disputeReason,
+          status: DisputeStatus.OPEN,
+          evidenceKeys: [],
+        },
+      });
+
+      await tx.trade.update({
+        where: { id: trade.id },
+        data: {
+          status: TradeStatus.DISPUTED,
+        },
+      });
+
+      await this.auditService.log(
+        {
+          actorId,
+          action: "TRADE_DISPUTE_OPENED",
+          entityType: "Dispute",
+          entityId: created.id,
+          payload: { tradeId: trade.id },
+        },
+        tx,
+      );
+
+      return created;
+    });
+
+    await Promise.all([
+      this.notificationsService.create({
+        userId: trade.buyerId,
+        type: NotificationType.DISPUTE,
+        title: "Trade disputed",
+        message: `Dispute opened for trade ${trade.id}`,
+        data: { tradeId: trade.id, disputeId: dispute.id },
+      }),
+      this.notificationsService.create({
+        userId: trade.sellerId,
+        type: NotificationType.DISPUTE,
+        title: "Trade disputed",
+        message: `Dispute opened for trade ${trade.id}`,
+        data: { tradeId: trade.id, disputeId: dispute.id },
+      }),
+    ]);
+
+    this.tradeGateway.notifyTradeStatus(trade.id, {
+      status: TradeStatus.DISPUTED,
+      event: "disputed",
+    });
+
+    return dispute;
   }
 
   async forceRefundEscrow(adminId: string, tradeId: string) {
@@ -380,7 +586,7 @@ export class TradesService {
       const updatedTrade = await tx.trade.update({
         where: { id: trade.id },
         data: {
-          status: TradeStatus.CANCELED,
+          status: TradeStatus.CANCELLED,
           canceledAt: new Date(),
         },
       });
@@ -414,8 +620,23 @@ export class TradesService {
       return updatedTrade;
     });
 
+    await Promise.all([
+      this.notificationsService.create({
+        userId: trade.buyerId,
+        type: NotificationType.TRADE,
+        title: "Trade refunded",
+        message: `Admin refunded escrow for trade ${trade.id}`,
+      }),
+      this.notificationsService.create({
+        userId: trade.sellerId,
+        type: NotificationType.TRADE,
+        title: "Trade refunded",
+        message: `Admin refunded escrow for trade ${trade.id}`,
+      }),
+    ]);
+
     this.tradeGateway.notifyTradeStatus(trade.id, {
-      status: TradeStatus.CANCELED,
+      status: TradeStatus.CANCELLED,
       event: "force_refund",
     });
 

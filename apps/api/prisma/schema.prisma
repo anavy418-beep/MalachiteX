@@ -20,10 +20,19 @@ enum OfferType {
 enum OfferStatus {
   ACTIVE
   PAUSED
+  ARCHIVED
+  // Legacy value kept for backward-compatible DB reads in existing environments.
   CLOSED
 }
 
 enum TradeStatus {
+  OPEN
+  PAYMENT_PENDING
+  PAYMENT_SENT
+  RELEASE_PENDING
+  COMPLETED
+  CANCELLED
+  // Legacy values kept for backward-compatible DB reads in existing environments.
   PENDING_PAYMENT
   PAID
   RELEASED
@@ -99,6 +108,10 @@ model Wallet {
   id                   String              @id @default(uuid())
   userId               String              @unique
   user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  walletIdentifier     String?             @unique
+  depositAddressBtc    String?
+  depositAddressErc20  String?
+  depositAddressTrc20  String?
   currency             String
   availableBalanceMinor BigInt             @default(0)
   escrowBalanceMinor   BigInt              @default(0)
@@ -160,7 +173,7 @@ model Trade {
   fiatPriceMinor   BigInt
   fiatTotalMinor   BigInt
   escrowHeldMinor  BigInt
-  status           TradeStatus       @default(PENDING_PAYMENT)
+  status           TradeStatus       @default(OPEN)
   openedAt         DateTime          @default(now())
   paidAt           DateTime?
   releasedAt       DateTime?

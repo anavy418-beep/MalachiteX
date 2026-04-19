@@ -16,6 +16,7 @@ import { NotificationsService } from "@/modules/notifications/notifications.serv
 import { WalletLedgerService } from "./wallet-ledger.service";
 import { CreateWithdrawalDto } from "./dto/create-withdrawal.dto";
 import { MockDepositDto } from "./dto/mock-deposit.dto";
+import { buildDepositAddresses, buildWalletIdentifier } from "./wallet-identity.util";
 
 @Injectable()
 export class WalletService {
@@ -27,10 +28,23 @@ export class WalletService {
   ) {}
 
   async getWallet(userId: string) {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+    let wallet = await this.prisma.wallet.findUnique({ where: { userId } });
 
     if (!wallet) {
       throw new NotFoundException("Wallet not found");
+    }
+
+    if (!wallet.walletIdentifier || !wallet.depositAddressBtc || !wallet.depositAddressErc20 || !wallet.depositAddressTrc20) {
+      const addresses = buildDepositAddresses(wallet.id);
+      wallet = await this.prisma.wallet.update({
+        where: { id: wallet.id },
+        data: {
+          walletIdentifier: wallet.walletIdentifier ?? buildWalletIdentifier(wallet.id, "USDT"),
+          depositAddressBtc: wallet.depositAddressBtc ?? addresses.BTC,
+          depositAddressErc20: wallet.depositAddressErc20 ?? addresses.ERC20,
+          depositAddressTrc20: wallet.depositAddressTrc20 ?? addresses.TRC20,
+        },
+      });
     }
 
     const ledger = await this.prisma.ledgerEntry.findMany({
@@ -43,6 +57,12 @@ export class WalletService {
       currency: wallet.currency,
       availableBalanceMinor: wallet.availableBalanceMinor.toString(),
       escrowBalanceMinor: wallet.escrowBalanceMinor.toString(),
+      walletId: wallet.walletIdentifier,
+      depositAddresses: {
+        BTC: wallet.depositAddressBtc,
+        ERC20: wallet.depositAddressErc20,
+        TRC20: wallet.depositAddressTrc20,
+      },
       ledger: ledger.map((item) => ({
         id: item.id,
         type: item.type,

@@ -9,6 +9,9 @@ import {
 
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+  const isPrefetchRequest =
+    request.headers.get("purpose")?.toLowerCase() === "prefetch" ||
+    request.headers.has("next-router-prefetch");
 
   const hasAccessToken = Boolean(request.cookies.get(ACCESS_TOKEN_COOKIE)?.value);
   const hasRefreshToken = Boolean(request.cookies.get(REFRESH_TOKEN_COOKIE)?.value);
@@ -19,13 +22,14 @@ export function middleware(request: NextRequest) {
   );
   const isAuthRoute = AUTH_ROUTE_PATHS.some((route) => pathname === route);
 
-  if (isProtectedRoute && !isAuthenticated) {
+  // Avoid caching auth redirects for route prefetches; evaluate auth on real navigation.
+  if (isProtectedRoute && !isAuthenticated && !isPrefetchRequest) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("next", `${pathname}${search}`);
     return NextResponse.redirect(loginUrl);
   }
 
-  if (isAuthRoute && isAuthenticated) {
+  if (isAuthRoute && isAuthenticated && !isPrefetchRequest) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
@@ -36,6 +40,8 @@ export const config = {
   matcher: [
     "/dashboard/:path*",
     "/wallet/:path*",
+    "/p2p/:path*",
+    "/offers/:path*",
     "/trades/:path*",
     "/deposits",
     "/withdrawals",

@@ -7,10 +7,18 @@ export interface WalletLedgerItem {
   createdAt: string;
 }
 
+export interface WalletDepositAddresses {
+  BTC?: string;
+  ERC20?: string;
+  TRC20?: string;
+}
+
 export interface WalletSummary {
   currency: string;
   availableBalanceMinor: string;
   escrowBalanceMinor: string;
+  walletId?: string;
+  depositAddresses?: WalletDepositAddresses;
   ledger: WalletLedgerItem[];
 }
 

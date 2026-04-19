@@ -7,7 +7,28 @@ import { join } from "node:path";
 import { AppModule } from "./app.module";
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { cors: true });
+  const rawCorsOrigins =
+    process.env.CORS_ORIGIN ??
+    process.env.FRONTEND_URL ??
+    "http://localhost:3000,https://malachitex-web.vercel.app";
+
+  const allowedOrigins = rawCorsOrigins
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    cors: {
+      origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+          return;
+        }
+        callback(new Error("CORS origin blocked"), false);
+      },
+      credentials: true,
+    },
+  });
 
   app.setGlobalPrefix("api");
   app.use(cookieParser());
@@ -37,7 +58,14 @@ async function bootstrap() {
     SwaggerModule.setup("api/docs", app, document);
   }
 
-  await app.listen(process.env.API_PORT ? Number(process.env.API_PORT) : 4000);
+  const port = Number(process.env.PORT ?? process.env.API_PORT ?? 4000);
+  await app.listen(port, "0.0.0.0");
+
+  const apiBase = await app.getUrl();
+  console.log(`[Malachitex API] listening at ${apiBase}/api`);
+  if (enableSwagger) {
+    console.log(`[Malachitex API] docs at ${apiBase}/api/docs`);
+  }
 }
 
 bootstrap();

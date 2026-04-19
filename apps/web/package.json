@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev -p 3000",
+    "prebuild": "node -e \"require('node:fs').rmSync('.next',{recursive:true,force:true})\"",
     "build": "next build",
     "start": "next start -p 3000",
     "lint": "echo \"No lint configured for web yet\"",
@@ -16,6 +17,7 @@
     "clsx": "^2.1.1",
     "lucide-react": "^0.441.0",
     "next": "^14.2.16",
+    "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "socket.io-client": "^4.8.1",

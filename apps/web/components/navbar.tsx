@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 const navLinks = [
   { href: "/", label: "Home" },
   { href: "/wallet", label: "Wallet" },
-  { href: "/offers", label: "P2P" },
+  { href: "/p2p", label: "P2P" },
   { href: "/dashboard", label: "Dashboard" },
 ];
 
@@ -48,6 +48,7 @@ export function Navbar() {
             <Link
               key={link.href}
               href={link.href}
+              prefetch={false}
               className={cn(
                 "rounded-md px-3 py-2 text-sm transition-colors",
                 (link.href === "/" ? pathname === "/" : pathname.startsWith(link.href))
@@ -81,12 +82,12 @@ export function Navbar() {
             </>
           ) : (
             <>
-              <Link href="/login">
+              <Link href="/login" prefetch={false}>
                 <Button variant="ghost" size="sm">
                   Login
                 </Button>
               </Link>
-              <Link href="/signup">
+              <Link href="/signup" prefetch={false}>
                 <Button size="sm">Sign up</Button>
               </Link>
             </>

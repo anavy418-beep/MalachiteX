@@ -38,7 +38,14 @@ export class DisputesService {
       throw new BadRequestException("Dispute already exists for this trade");
     }
 
-    if (trade.status !== TradeStatus.PAID && trade.status !== TradeStatus.PENDING_PAYMENT) {
+    if (
+      trade.status !== TradeStatus.PAYMENT_PENDING &&
+      trade.status !== TradeStatus.OPEN &&
+      trade.status !== TradeStatus.PAYMENT_SENT &&
+      trade.status !== TradeStatus.RELEASE_PENDING &&
+      trade.status !== TradeStatus.PAID &&
+      trade.status !== TradeStatus.PENDING_PAYMENT
+    ) {
       throw new BadRequestException("Trade status not eligible for dispute");
     }
 

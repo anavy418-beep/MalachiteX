@@ -13,7 +13,15 @@ export class UsersService {
         where: {
           OR: [{ buyerId: userId }, { sellerId: userId }],
           status: {
-            in: [TradeStatus.PENDING_PAYMENT, TradeStatus.PAID, TradeStatus.DISPUTED],
+            in: [
+              TradeStatus.OPEN,
+              TradeStatus.PAYMENT_PENDING,
+              TradeStatus.PAYMENT_SENT,
+              TradeStatus.RELEASE_PENDING,
+              TradeStatus.DISPUTED,
+              TradeStatus.PENDING_PAYMENT,
+              TradeStatus.PAID,
+            ],
           },
         },
       }),

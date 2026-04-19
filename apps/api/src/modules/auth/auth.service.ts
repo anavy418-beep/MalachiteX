@@ -12,6 +12,7 @@ import * as bcrypt from "bcrypt";
 import { randomBytes, randomUUID } from "node:crypto";
 import { PrismaService } from "@/common/prisma/prisma.service";
 import { AuditService } from "@/modules/audit/audit.service";
+import { buildDepositAddresses, buildWalletIdentifier } from "@/modules/wallet/wallet-identity.util";
 import { LoginDto } from "./dto/login.dto";
 import { ResetPasswordDto } from "./dto/reset-password.dto";
 import { SignupDto } from "./dto/signup.dto";
@@ -87,9 +88,15 @@ export class AuthService {
         },
       });
 
+      const addresses = buildDepositAddresses(createdUser.id);
+
       await tx.wallet.create({
         data: {
           userId: createdUser.id,
+          walletIdentifier: buildWalletIdentifier(createdUser.id, "USDT"),
+          depositAddressBtc: addresses.BTC,
+          depositAddressErc20: addresses.ERC20,
+          depositAddressTrc20: addresses.TRC20,
           currency: process.env.DEFAULT_FIAT_CURRENCY ?? "INR",
           availableBalanceMinor: BigInt(0),
           escrowBalanceMinor: BigInt(0),
@@ -474,13 +481,13 @@ export class AuthService {
   }
 
   private get accessSecret(): string {
-    const value = process.env.JWT_ACCESS_SECRET;
+    const value = process.env.JWT_ACCESS_SECRET ?? process.env.JWT_SECRET;
     if (!value) throw new InternalServerErrorException("JWT_ACCESS_SECRET is not configured");
     return value;
   }
 
   private get refreshSecret(): string {
-    const value = process.env.JWT_REFRESH_SECRET;
+    const value = process.env.JWT_REFRESH_SECRET ?? process.env.JWT_SECRET;
     if (!value) throw new InternalServerErrorException("JWT_REFRESH_SECRET is not configured");
     return value;
   }

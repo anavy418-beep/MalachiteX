@@ -1,20 +1,25 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { ArrowDownToLine, CheckCircle2, Clock3 } from "lucide-react";
+import { ArrowDownToLine, CheckCircle2, Clock3, QrCode } from "lucide-react";
 import { tokenStore } from "@/lib/api";
+import { DEMO_DEPOSITS, DEMO_WALLET_SUMMARY } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
-import { walletService, type DepositRecord } from "@/services/wallet.service";
+import {
+  getWalletNetworkLabel,
+  resolveWalletIdentity,
+  type WalletNetwork,
+} from "@/lib/wallet-identity";
+import { walletService, type DepositRecord, type WalletSummary } from "@/services/wallet.service";
+import { AddressQrModal } from "@/components/wallet/address-qr-modal";
+import { CopyableValueRow } from "@/components/wallet/copyable-value-row";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-const DEMO_DEPOSITS: DepositRecord[] = [
-  { id: "d1", amountMinor: "500000", txRef: "MX-DEMO-9182", status: "CONFIRMED", createdAt: new Date().toISOString() },
-  { id: "d2", amountMinor: "300000", txRef: "MX-DEMO-9150", status: "PENDING", createdAt: new Date().toISOString() },
-];
+const NETWORKS: WalletNetwork[] = ["ERC20", "TRC20", "BTC"];
 
 function statusBadge(status: string) {
   const normalized = status.toUpperCase();
@@ -32,27 +37,47 @@ function statusBadge(status: string) {
 
 export default function WalletDepositPage() {
   const [records, setRecords] = useState<DepositRecord[]>([]);
+  const [wallet, setWallet] = useState<WalletSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [isDemo, setIsDemo] = useState(false);
+  const [selectedNetwork, setSelectedNetwork] = useState<WalletNetwork>("ERC20");
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [showQr, setShowQr] = useState(false);
 
   async function loadRecords() {
     const token = tokenStore.accessToken;
 
     if (!token) {
       setRecords(DEMO_DEPOSITS);
+      setWallet(DEMO_WALLET_SUMMARY);
+      setIsDemo(true);
       setError("Session token missing. Showing demo deposit data.");
       setLoading(false);
       return;
     }
 
     try {
-      const payload = await walletService.listDeposits(token);
-      setRecords(payload);
+      const [payload, walletPayload] = await Promise.all([
+        walletService.listDeposits(token),
+        walletService.getWallet(token),
+      ]);
+
+      setWallet(walletPayload);
+      if (payload.length === 0) {
+        setRecords(DEMO_DEPOSITS);
+        setIsDemo(true);
+      } else {
+        setRecords(payload);
+        setIsDemo(false);
+      }
       setError(null);
     } catch (err) {
       setRecords(DEMO_DEPOSITS);
+      setWallet(DEMO_WALLET_SUMMARY);
+      setIsDemo(true);
       setError((err as Error).message);
     } finally {
       setLoading(false);
@@ -60,7 +85,7 @@ export default function WalletDepositPage() {
   }
 
   useEffect(() => {
-    loadRecords();
+    void loadRecords();
   }, []);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -91,6 +116,27 @@ export default function WalletDepositPage() {
     }
   }
 
+  const currentWallet = wallet ?? DEMO_WALLET_SUMMARY;
+  const selectedAsset = selectedNetwork === "BTC" ? "BTC" : "USDT";
+  const identity = resolveWalletIdentity({
+    walletId: currentWallet.walletId,
+    currency: currentWallet.currency,
+    depositAddresses: currentWallet.depositAddresses,
+    seedHint: "malachitex:wallet:deposit",
+    selectedNetwork,
+  });
+  const activeAddress = identity.addresses[selectedNetwork];
+
+  async function copyText(value: string, field: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedField(field);
+      setTimeout(() => setCopiedField((prev) => (prev === field ? null : prev)), 1600);
+    } catch {
+      setError("Clipboard copy failed. Please copy manually.");
+    }
+  }
+
   return (
     <section className="space-y-6">
       <header className="space-y-2">
@@ -98,6 +144,61 @@ export default function WalletDepositPage() {
         <h1 className="text-3xl font-semibold text-white">Deposit Funds</h1>
         <p className="text-sm text-slate-400">Demo-safe deposit confirmation flow for staging previews.</p>
       </header>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Deposit Coordinates</CardTitle>
+          <CardDescription>Use matching network and address for reliable crediting.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+            <p className="text-xs uppercase tracking-wide text-slate-400">Wallet ID</p>
+            <CopyableValueRow
+              className="mt-1 flex items-center justify-between gap-3"
+              value={identity.walletId}
+              copied={copiedField === "wallet-id"}
+              onCopy={() => void copyText(identity.walletId, "wallet-id")}
+            />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-[220px_1fr]">
+            <div className="grid gap-2">
+              {NETWORKS.map((network) => (
+                <button
+                  key={network}
+                  onClick={() => setSelectedNetwork(network)}
+                  className={`rounded-lg border px-3 py-2 text-left text-sm transition ${
+                    selectedNetwork === network
+                      ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-200"
+                      : "border-zinc-700 bg-zinc-950 text-slate-300 hover:border-zinc-600"
+                  }`}
+                >
+                  {getWalletNetworkLabel(network)}
+                </button>
+              ))}
+            </div>
+
+            <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs uppercase tracking-wide text-slate-400">Deposit Address</p>
+                <span className="rounded-full border border-emerald-700/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200">
+                  {selectedAsset} · {getWalletNetworkLabel(selectedNetwork)}
+                </span>
+              </div>
+              <CopyableValueRow
+                className="flex flex-wrap items-center justify-between gap-3"
+                value={activeAddress}
+                copied={copiedField === "deposit-address"}
+                onCopy={() => void copyText(activeAddress, "deposit-address")}
+              />
+              <Button size="sm" className="w-fit gap-1.5" onClick={() => setShowQr(true)}>
+                <QrCode className="h-3.5 w-3.5" />
+                Show QR
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -179,8 +280,17 @@ export default function WalletDepositPage() {
 
       <p className="inline-flex items-center gap-1 text-xs text-emerald-300/90">
         <CheckCircle2 className="h-3.5 w-3.5" />
-        Demo flow is active and safe for staging environments.
+        {isDemo
+          ? "Demo deposit records are active for staging walkthroughs."
+          : "Mock deposit flow is active and safe for staging environments."}
       </p>
+
+      <AddressQrModal
+        open={showQr}
+        onClose={() => setShowQr(false)}
+        address={activeAddress}
+        networkLabel={getWalletNetworkLabel(selectedNetwork)}
+      />
     </section>
   );
 }
