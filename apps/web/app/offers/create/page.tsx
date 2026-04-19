@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@p2p/ui";
+import { Button } from "@/components/ui/button";
 import { apiRequest, tokenStore } from "@/lib/api";
 
 export default function CreateOfferPage() {

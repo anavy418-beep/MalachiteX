@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Button } from "@p2p/ui";
+import { Button } from "@/components/ui/button";
 import { apiRequest, tokenStore } from "@/lib/api";
 
 interface Offer {

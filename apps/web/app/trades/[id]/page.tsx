@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { io, Socket } from "socket.io-client";
-import { Button } from "@p2p/ui";
+import { Button } from "@/components/ui/button";
 import { apiRequest, tokenStore } from "@/lib/api";
 
 interface Trade {
