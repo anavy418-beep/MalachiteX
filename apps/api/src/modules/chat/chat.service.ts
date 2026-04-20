@@ -44,7 +44,7 @@ export class ChatService {
         tx,
       );
 
-      const botMessageBody = this.getDemoBotReply(dto.body, trade.status);
+      const botMessageBody = this.getTradeAssistantReply(dto.body, trade.status);
       let botMessage: typeof created | null = null;
 
       if (this.demoBotEnabled && botMessageBody) {
@@ -54,7 +54,7 @@ export class ChatService {
           data: {
             tradeId,
             senderId: botSenderId,
-            body: `[Demo Bot] ${botMessageBody}`,
+            body: `[Trade Assistant] ${botMessageBody}`,
           },
         });
 
@@ -117,11 +117,11 @@ export class ChatService {
     return process.env.DEMO_CHAT_BOT_ENABLED !== "false";
   }
 
-  private getDemoBotReply(messageBody: string, tradeStatus: string): string | null {
+  private getTradeAssistantReply(messageBody: string, tradeStatus: string): string | null {
     const body = messageBody.trim().toLowerCase();
     const status = tradeStatus.toUpperCase();
 
-    if (!body || body.startsWith("[demo bot]")) {
+    if (!body || body.startsWith("[trade assistant]")) {
       return null;
     }
 
@@ -134,7 +134,7 @@ export class ChatService {
     }
 
     if (status === "DISPUTED") {
-      return "Trade is under dispute review. Please share payment proof and details in this chat.";
+      return "Trade is under dispute review. Share reference IDs, receipts, and payment timeline in this chat.";
     }
 
     if (status === "RELEASE_PENDING") {
@@ -143,7 +143,7 @@ export class ChatService {
 
     if (/(help|how|what next|status)/i.test(body)) {
       if (status === "OPEN" || status === "PAYMENT_PENDING" || status === "PENDING_PAYMENT") {
-        return "Trade is open. Buyer should send payment and click Mark as Paid.";
+        return "Trade is open. Buyer should pay using shown instructions, then click Mark as Paid with proof.";
       }
       if (status === "PAYMENT_SENT" || status === "PAID") {
         return "Payment marked. Waiting for seller to confirm funds and release escrow.";
@@ -156,7 +156,7 @@ export class ChatService {
 
     if (/(paid|payment sent|payment done|sent payment|utr|reference|receipt)/i.test(body)) {
       if (status === "OPEN" || status === "PAYMENT_PENDING" || status === "PENDING_PAYMENT") {
-        return "Thanks. Please click Mark as Paid so seller can verify and release.";
+        return "Thanks. Please click Mark as Paid with reference/proof so seller can verify and release.";
       }
       return "Payment proof received. Waiting for seller release.";
     }
@@ -166,9 +166,9 @@ export class ChatService {
     }
 
     if (/(hello|hi|hey|start)/i.test(body) && (status === "OPEN" || status === "PAYMENT_PENDING" || status === "PENDING_PAYMENT")) {
-      return "Hello, I am the demo trade assistant. Share payment details here and keep trade on-platform.";
+      return "Hello, I am the trade assistant. Keep payment proof, references, and updates on-platform for escrow safety.";
     }
 
-    return "Hello, I am the demo trade assistant.";
+    return "Hello, I am the trade assistant.";
   }
 }

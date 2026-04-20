@@ -1,6 +1,8 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import {
@@ -8,6 +10,7 @@ import {
   NotificationType,
   OfferStatus,
   OfferType,
+  Prisma,
   TradeStatus,
 } from "@prisma/client";
 import { PrismaService } from "@/common/prisma/prisma.service";
@@ -15,10 +18,14 @@ import { AuditService } from "@/modules/audit/audit.service";
 import { NotificationsService } from "@/modules/notifications/notifications.service";
 import { WalletService } from "@/modules/wallet/wallet.service";
 import { CreateTradeDto } from "./dto/create-trade.dto";
+import { MarkTradePaidDto } from "./dto/mark-trade-paid.dto";
+import { OpenTradeDisputeDto } from "./dto/open-trade-dispute.dto";
 import { TradeGateway } from "./trade.gateway";
 
 @Injectable()
 export class TradesService {
+  private readonly logger = new Logger(TradesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletService: WalletService,
@@ -55,6 +62,55 @@ export class TradesService {
     return cancelledStates.includes(status);
   }
 
+  private buildPaymentInstructions(
+    offer: {
+      paymentMethod: string;
+      paymentDetails?: Prisma.JsonValue | null;
+      fiatCurrency: string;
+    },
+    fiatTotalMinor: bigint,
+  ): Prisma.JsonObject {
+    const details =
+      offer.paymentDetails && typeof offer.paymentDetails === "object" && !Array.isArray(offer.paymentDetails)
+        ? (offer.paymentDetails as Prisma.JsonObject)
+        : {};
+
+    const fallbackReceiver = details.receiverName ?? "Verified Malachitex merchant";
+
+    return {
+      method: offer.paymentMethod,
+      receiverName: fallbackReceiver,
+      upiId: details.upiId ?? null,
+      bankName: details.bankName ?? null,
+      accountNumber: details.accountNumber ?? null,
+      ifsc: details.ifsc ?? null,
+      fiatCurrency: offer.fiatCurrency,
+      amountMinor: fiatTotalMinor.toString(),
+      note: "Demo-safe payment instructions. Verify receiver details before marking paid.",
+    };
+  }
+
+  private buildPaymentProof(dto: MarkTradePaidDto, tradeId: string): Prisma.JsonObject {
+    const paymentReference = dto.paymentReference?.trim();
+    const proofFileName = dto.proofFileName?.trim();
+
+    if (!paymentReference && !proofFileName && !dto.proofUrl) {
+      throw new BadRequestException("Payment reference or proof screenshot is required");
+    }
+
+    const safeFileName = proofFileName?.replace(/[^A-Za-z0-9._\- ()]/g, "_");
+
+    return {
+      paymentReference: paymentReference ?? null,
+      proofFileName: safeFileName ?? null,
+      proofMimeType: dto.proofMimeType ?? null,
+      proofUrl:
+        dto.proofUrl ??
+        (safeFileName ? `/mock-payment-proofs/${tradeId}/${Date.now()}-${safeFileName}` : null),
+      uploadedAt: new Date().toISOString(),
+    };
+  }
+
   async listForUser(userId: string, role: "USER" | "ADMIN") {
     const trades = await this.prisma.trade.findMany({
       where:
@@ -70,7 +126,8 @@ export class TradesService {
             asset: true,
             fiatCurrency: true,
             paymentMethod: true,
-          },
+            paymentDetails: true,
+          } as any,
         },
       },
       orderBy: { createdAt: "desc" },
@@ -98,6 +155,9 @@ export class TradesService {
     }
 
     const amountMinor = BigInt(dto.amountMinor);
+    if (amountMinor <= 0n) {
+      throw new BadRequestException("Trade amount must be greater than zero");
+    }
 
     if (amountMinor < offer.minAmountMinor || amountMinor > offer.maxAmountMinor) {
       throw new BadRequestException("Trade amount outside offer limits");
@@ -105,6 +165,7 @@ export class TradesService {
 
     const buyerId = offer.type === OfferType.SELL ? actorId : offer.userId;
     const sellerId = offer.type === OfferType.SELL ? offer.userId : actorId;
+    const fiatTotalMinor = (offer.priceMinor * amountMinor) / BigInt(100);
 
     const sellerWallet = await this.prisma.wallet.findUnique({ where: { userId: sellerId } });
     const buyerWallet = await this.prisma.wallet.findUnique({ where: { userId: buyerId } });
@@ -125,10 +186,11 @@ export class TradesService {
           sellerId,
           amountMinor,
           fiatPriceMinor: offer.priceMinor,
-          fiatTotalMinor: (offer.priceMinor * amountMinor) / BigInt(100),
+          fiatTotalMinor,
           status: TradeStatus.OPEN,
           escrowHeldMinor: amountMinor,
-        },
+          paymentInstructions: this.buildPaymentInstructions(offer as any, fiatTotalMinor),
+        } as any,
       });
 
       await this.walletService.postTradeEscrowHold(tx, {
@@ -158,6 +220,7 @@ export class TradesService {
             amountMinor: dto.amountMinor,
             sellerId,
             buyerId,
+            paymentMethod: offer.paymentMethod,
           },
         },
         tx,
@@ -186,6 +249,8 @@ export class TradesService {
       event: "created",
     });
 
+    this.logger.log(`Trade ${trade.id} created by ${actorId}`);
+
     return {
       ...trade,
       amountMinor: trade.amountMinor.toString(),
@@ -205,24 +270,26 @@ export class TradesService {
             asset: true,
             fiatCurrency: true,
             paymentMethod: true,
+            paymentDetails: true,
             terms: true,
             minAmountMinor: true,
             maxAmountMinor: true,
-          },
+          } as any,
         },
+        dispute: true,
         messages: {
           orderBy: { createdAt: "asc" },
           take: 200,
         },
       },
-    });
+    }) as any;
 
     if (!trade) {
       throw new NotFoundException("Trade not found");
     }
 
     if (role !== "ADMIN" && trade.buyerId !== userId && trade.sellerId !== userId) {
-      throw new BadRequestException("Not a participant of this trade");
+      throw new ForbiddenException("Not a participant of this trade");
     }
 
     return {
@@ -242,7 +309,7 @@ export class TradesService {
     };
   }
 
-  async markPaid(actorId: string, tradeId: string) {
+  async markPaid(actorId: string, tradeId: string, dto: MarkTradePaidDto = {}) {
     const trade = await this.prisma.trade.findUnique({ where: { id: tradeId } });
 
     if (!trade) {
@@ -250,12 +317,14 @@ export class TradesService {
     }
 
     if (trade.buyerId !== actorId) {
-      throw new BadRequestException("Only buyer can mark trade as paid");
+      throw new ForbiddenException("Only buyer can mark trade as paid");
     }
 
     if (!this.isPaymentPendingStatus(trade.status)) {
       throw new BadRequestException("Trade is not in a payable state");
     }
+
+    const paymentProof = this.buildPaymentProof(dto, tradeId);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const result = await tx.trade.update({
@@ -263,6 +332,18 @@ export class TradesService {
         data: {
           status: TradeStatus.PAYMENT_SENT,
           paidAt: new Date(),
+          paymentProof,
+        } as any,
+      });
+
+      await tx.tradeMessage.create({
+        data: {
+          tradeId,
+          senderId: actorId,
+          body: `[System] Buyer marked payment as sent. Reference: ${
+            paymentProof.paymentReference ?? "not provided"
+          }. Proof: ${paymentProof.proofFileName ?? paymentProof.proofUrl ?? "not provided"}. Seller should verify funds before release.`,
+          attachmentKey: typeof paymentProof.proofUrl === "string" ? paymentProof.proofUrl : undefined,
         },
       });
 
@@ -272,6 +353,10 @@ export class TradesService {
           action: "TRADE_MARKED_PAID",
           entityType: "Trade",
           entityId: tradeId,
+          payload: {
+            proofFileName: paymentProof.proofFileName,
+            hasReference: Boolean(paymentProof.paymentReference),
+          },
         },
         tx,
       );
@@ -291,6 +376,8 @@ export class TradesService {
       event: "marked_paid",
     });
 
+    this.logger.log(`Trade ${trade.id} marked paid by buyer ${actorId}`);
+
     return updated;
   }
 
@@ -302,14 +389,14 @@ export class TradesService {
     }
 
     if (role !== "ADMIN" && trade.sellerId !== actorId) {
-      throw new BadRequestException("Only seller or admin can release escrow");
+      throw new ForbiddenException("Only seller or admin can release escrow");
     }
 
-    if (trade.status === TradeStatus.DISPUTED) {
+    if (trade.status === TradeStatus.DISPUTED && role !== "ADMIN") {
       throw new BadRequestException("Disputed trades must be resolved through dispute workflow");
     }
 
-    if (!this.isPaymentSentStatus(trade.status)) {
+    if (!this.isPaymentSentStatus(trade.status) && !(role === "ADMIN" && trade.status === TradeStatus.DISPUTED)) {
       throw new BadRequestException("Trade not eligible for release");
     }
 
@@ -332,8 +419,17 @@ export class TradesService {
         where: { id: trade.id },
         data: {
           status: TradeStatus.COMPLETED,
+          sellerPaymentConfirmedAt: new Date(),
           releasedAt: new Date(),
           completedAt: new Date(),
+        } as any,
+      });
+
+      await tx.tradeMessage.create({
+        data: {
+          tradeId: trade.id,
+          senderId: actorId,
+          body: "[System] Seller confirmed payment and released escrow. Trade is completed.",
         },
       });
 
@@ -361,6 +457,7 @@ export class TradesService {
           action: "TRADE_ESCROW_RELEASED",
           entityType: "Trade",
           entityId: trade.id,
+          payload: { sellerPaymentConfirmedAt: true },
         },
         tx,
       );
@@ -388,6 +485,8 @@ export class TradesService {
       event: "released",
     });
 
+    this.logger.log(`Trade ${trade.id} released by ${actorId}`);
+
     return released;
   }
 
@@ -399,7 +498,7 @@ export class TradesService {
     }
 
     if (![trade.buyerId, trade.sellerId].includes(actorId)) {
-      throw new BadRequestException("Only participants can cancel this trade");
+      throw new ForbiddenException("Only participants can cancel this trade");
     }
 
     if (this.isCompletedStatus(trade.status)) {
@@ -429,6 +528,14 @@ export class TradesService {
         data: {
           status: TradeStatus.CANCELLED,
           canceledAt: new Date(),
+        },
+      });
+
+      await tx.tradeMessage.create({
+        data: {
+          tradeId: trade.id,
+          senderId: actorId,
+          body: "[System] Trade was cancelled. Escrow refund is being processed for the seller.",
         },
       });
 
@@ -481,10 +588,12 @@ export class TradesService {
       event: "canceled",
     });
 
+    this.logger.log(`Trade ${trade.id} canceled by ${actorId}`);
+
     return canceled;
   }
 
-  async openDispute(actorId: string, tradeId: string, reason?: string) {
+  async openDispute(actorId: string, tradeId: string, input?: OpenTradeDisputeDto | string) {
     const trade = await this.prisma.trade.findUnique({
       where: { id: tradeId },
       include: { dispute: true },
@@ -495,7 +604,7 @@ export class TradesService {
     }
 
     if (![trade.buyerId, trade.sellerId].includes(actorId)) {
-      throw new BadRequestException("Only trade participants can open dispute");
+      throw new ForbiddenException("Only trade participants can open dispute");
     }
 
     if (trade.dispute) {
@@ -510,7 +619,17 @@ export class TradesService {
       throw new BadRequestException("Dispute cannot be opened for closed trades");
     }
 
-    const disputeReason = reason?.trim() || "Dispute opened from trade workspace.";
+    const rawDisputeReason = typeof input === "string" ? input.trim() : input?.reason?.trim();
+    const disputeReason = rawDisputeReason || "Dispute opened from trade workspace.";
+    const evidenceKeys =
+      typeof input === "string"
+        ? []
+        : [
+            ...(input?.evidenceKeys ?? []),
+            input?.proofFileName ? `mock-dispute-proof:${input.proofFileName}` : undefined,
+            input?.proofUrl ? `proof-url:${input.proofUrl}` : undefined,
+            input?.paymentReference ? `payment-reference:${input.paymentReference}` : undefined,
+          ].filter((entry): entry is string => Boolean(entry));
 
     const dispute = await this.prisma.$transaction(async (tx) => {
       const created = await tx.dispute.create({
@@ -519,7 +638,7 @@ export class TradesService {
           openedById: actorId,
           reason: disputeReason,
           status: DisputeStatus.OPEN,
-          evidenceKeys: [],
+          evidenceKeys,
         },
       });
 
@@ -530,13 +649,22 @@ export class TradesService {
         },
       });
 
+      await tx.tradeMessage.create({
+        data: {
+          tradeId: trade.id,
+          senderId: actorId,
+          body: `[System] Dispute opened. Reason: ${disputeReason}. Keep payment proof and all updates inside this trade chat.`,
+          attachmentKey: evidenceKeys.find((entry) => entry.startsWith("proof-url:"))?.replace("proof-url:", ""),
+        },
+      });
+
       await this.auditService.log(
         {
           actorId,
           action: "TRADE_DISPUTE_OPENED",
           entityType: "Dispute",
           entityId: created.id,
-          payload: { tradeId: trade.id },
+          payload: { tradeId: trade.id, evidenceCount: evidenceKeys.length },
         },
         tx,
       );
@@ -565,6 +693,8 @@ export class TradesService {
       status: TradeStatus.DISPUTED,
       event: "disputed",
     });
+
+    this.logger.log(`Trade ${trade.id} disputed by ${actorId}`);
 
     return dispute;
   }

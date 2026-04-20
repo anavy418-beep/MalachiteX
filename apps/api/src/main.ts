@@ -4,13 +4,14 @@ import { NestExpressApplication } from "@nestjs/platform-express";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import cookieParser from "cookie-parser";
 import { join } from "node:path";
+import { ApiExceptionFilter } from "./common/filters/api-exception.filter";
 import { AppModule } from "./app.module";
 
 async function bootstrap() {
   const rawCorsOrigins =
     process.env.CORS_ORIGIN ??
     process.env.FRONTEND_URL ??
-    "http://localhost:3000,https://malachitex-web.vercel.app";
+    "http://localhost:3000";
 
   const allowedOrigins = rawCorsOrigins
     .split(",")
@@ -30,9 +31,11 @@ async function bootstrap() {
     },
   });
 
+  app.set("trust proxy", 1);
   app.setGlobalPrefix("api");
   app.use(cookieParser());
   app.useStaticAssets(join(process.cwd(), "uploads"), { prefix: "/uploads/" });
+  app.useGlobalFilters(new ApiExceptionFilter());
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

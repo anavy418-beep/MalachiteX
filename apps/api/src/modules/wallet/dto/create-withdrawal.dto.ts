@@ -1,10 +1,13 @@
-import { IsInt, IsString, Min } from "class-validator";
+import { Transform } from "class-transformer";
+import { IsString, Matches } from "class-validator";
 
 export class CreateWithdrawalDto {
-  @IsInt()
-  @Min(1)
-  amountMinor!: number;
+  @Transform(({ value }) => String(value ?? "").trim())
+  @IsString()
+  @Matches(/^\d+$/)
+  amountMinor!: string;
 
+  @Transform(({ value }) => String(value ?? "").trim())
   @IsString()
   destination!: string;
 }

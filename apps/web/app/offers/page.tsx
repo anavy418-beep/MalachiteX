@@ -9,6 +9,7 @@ import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import { offersService, type OfferRecord } from "@/services/offers.service";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { LoadingState } from "@/components/ui/loading-state";
 
 function statusTone(status: string) {
   const normalized = status.toUpperCase();
@@ -88,7 +89,7 @@ export default function OffersPage() {
   }
 
   if (isBootstrapping) {
-    return <p className="text-sm text-slate-400">Loading offers...</p>;
+    return <LoadingState label="Loading your offers" />;
   }
 
   if (!isAuthenticated) {

@@ -14,8 +14,17 @@ export interface OfferRecord {
   minAmountMinor: string;
   maxAmountMinor: string;
   paymentMethod: string;
+  paymentDetails?: PaymentDetails | null;
   terms?: string | null;
   createdAt?: string;
+}
+
+export interface PaymentDetails {
+  receiverName?: string;
+  upiId?: string;
+  bankName?: string;
+  accountNumber?: string;
+  ifsc?: string;
 }
 
 export interface CreateOfferInput {
@@ -26,6 +35,11 @@ export interface CreateOfferInput {
   minAmountMinor: string;
   maxAmountMinor: string;
   paymentMethod: string;
+  paymentReceiverName?: string;
+  paymentUpiId?: string;
+  paymentBankName?: string;
+  paymentAccountNumber?: string;
+  paymentIfsc?: string;
   terms?: string;
 }
 
@@ -75,6 +89,13 @@ function makeDemoOffer(input: CreateOfferInput, fallback: { userId: string; merc
     minAmountMinor: input.minAmountMinor,
     maxAmountMinor: input.maxAmountMinor,
     paymentMethod: input.paymentMethod,
+    paymentDetails: {
+      receiverName: input.paymentReceiverName,
+      upiId: input.paymentUpiId,
+      bankName: input.paymentBankName,
+      accountNumber: input.paymentAccountNumber,
+      ifsc: input.paymentIfsc,
+    },
     terms: input.terms ?? "",
     createdAt: new Date().toISOString(),
   } satisfies OfferRecord;

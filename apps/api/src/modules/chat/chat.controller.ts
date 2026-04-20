@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post } from "@nestjs/common";
 import { CurrentUser, RequestUser } from "@/common/decorators/current-user.decorator";
 import { ChatService } from "./chat.service";
 import { SendTradeMessageDto } from "./dto/send-trade-message.dto";
@@ -10,7 +10,7 @@ export class ChatController {
   @Get("trades/:tradeId/messages")
   listTradeMessages(
     @CurrentUser() user: RequestUser,
-    @Param("tradeId") tradeId: string,
+    @Param("tradeId", new ParseUUIDPipe({ version: "4" })) tradeId: string,
   ) {
     return this.chatService.listTradeMessages(user.userId, tradeId);
   }
@@ -18,7 +18,7 @@ export class ChatController {
   @Post("trades/:tradeId/messages")
   sendTradeMessage(
     @CurrentUser() user: RequestUser,
-    @Param("tradeId") tradeId: string,
+    @Param("tradeId", new ParseUUIDPipe({ version: "4" })) tradeId: string,
     @Body() dto: SendTradeMessageDto,
   ) {
     return this.chatService.sendTradeMessage(user.userId, tradeId, dto);

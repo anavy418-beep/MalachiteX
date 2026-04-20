@@ -7,6 +7,7 @@ const READ_STORAGE_PREFIX = "malachitex_notifications_read_v1";
 
 export type NotificationType = "TRADE_UPDATE" | "OFFER_UPDATE" | "WALLET_EVENT" | "SYSTEM_ALERT";
 export type NotificationLevel = "INFO" | "WARN" | "CRITICAL";
+export type NotificationScope = "ALL" | "P2P";
 
 export interface AppNotification {
   id: string;
@@ -23,6 +24,7 @@ interface BackendNotification {
   type: string;
   title: string;
   message: string;
+  data?: Record<string, unknown> | null;
   readAt?: string | null;
   createdAt: string;
 }
@@ -52,8 +54,20 @@ function writeReadIds(userId: string, ids: Set<string>) {
   localStorage.setItem(storageKey(userId), JSON.stringify([...ids]));
 }
 
-function mapBackendType(type: string): NotificationType {
-  const upper = type.toUpperCase();
+function isDemoTradingNotification(item: Pick<BackendNotification, "title" | "message" | "data">) {
+  const domain =
+    item.data && typeof item.data === "object" && !Array.isArray(item.data)
+      ? String(item.data.domain ?? "").toUpperCase()
+      : "";
+  if (domain === "DEMO_TRADING") return true;
+
+  const text = `${item.title} ${item.message}`.toLowerCase();
+  return text.includes("demo trading") || text.includes("paper trading") || text.includes("paper order") || text.includes("paper position");
+}
+
+function mapBackendType(item: BackendNotification): NotificationType {
+  if (isDemoTradingNotification(item)) return "SYSTEM_ALERT";
+  const upper = item.type.toUpperCase();
   if (upper.includes("TRADE")) return "TRADE_UPDATE";
   if (upper.includes("WALLET")) return "WALLET_EVENT";
   if (upper.includes("SYSTEM")) return "SYSTEM_ALERT";
@@ -68,7 +82,7 @@ function mapLevel(input: { type: NotificationType; title: string; message: strin
 }
 
 function normalizeBackendNotification(item: BackendNotification): AppNotification {
-  const mappedType = mapBackendType(item.type);
+  const mappedType = mapBackendType(item);
   return {
     id: item.id,
     type: mappedType,
@@ -178,6 +192,7 @@ export const notificationService = {
     wallet: WalletSummary;
     trades: TradeRecord[];
     offers: OfferRecord[];
+    scope?: NotificationScope;
   }): Promise<AppNotification[]> {
     try {
       const response = await apiRequest<BackendNotification[]>("/notifications", {
@@ -188,7 +203,12 @@ export const notificationService = {
         return buildDerivedNotifications(input);
       }
 
-      return response.map(normalizeBackendNotification);
+      const filteredResponse =
+        (input.scope ?? "ALL") === "P2P"
+          ? response.filter((item) => !isDemoTradingNotification(item))
+          : response;
+
+      return filteredResponse.map(normalizeBackendNotification);
     } catch {
       return buildDerivedNotifications(input);
     }

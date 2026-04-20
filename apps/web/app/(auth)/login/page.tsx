@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
+import { Sparkles } from "lucide-react";
 import { z } from "zod";
 import { AuthShell, FieldError } from "@/components/auth";
+import { friendlyErrorMessage } from "@/lib/errors";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +17,11 @@ const loginSchema = z.object({
   email: z.string().trim().email("Enter a valid email"),
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
+
+const DEMO_LOGIN = {
+  email: process.env.NEXT_PUBLIC_DEMO_EMAIL ?? "alice@p2p.local",
+  password: process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "Password@123",
+};
 
 type LoginFormData = z.infer<typeof loginSchema>;
 
@@ -33,6 +40,8 @@ export default function LoginPage() {
   const [fieldErrors, setFieldErrors] = useState<FormErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoAttempted, setDemoAttempted] = useState(false);
   const [nextPath, setNextPath] = useState("/dashboard");
 
   useEffect(() => {
@@ -47,6 +56,14 @@ export default function LoginPage() {
       router.replace(nextPath);
     }
   }, [isAuthenticated, isBootstrapping, router, nextPath]);
+
+  useEffect(() => {
+    const shouldAutoDemo = new URLSearchParams(window.location.search).get("demo") === "1";
+    if (!shouldAutoDemo || demoAttempted || isAuthenticated || isBootstrapping) return;
+
+    setDemoAttempted(true);
+    void handleDemoLogin();
+  }, [demoAttempted, isAuthenticated, isBootstrapping]);
 
   function validate(data: LoginFormData): FormErrors {
     const parsed = loginSchema.safeParse(data);
@@ -84,16 +101,34 @@ export default function LoginPage() {
       await login(formData);
       router.replace(nextPath);
     } catch (error) {
-      setFormError((error as Error).message || "Unable to login");
+      setFormError(friendlyErrorMessage(error, "We could not sign you in. Please check the details and try again."));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleDemoLogin() {
+    setDemoLoading(true);
+    setFormError(null);
+    setFieldErrors({});
+
+    try {
+      await login(DEMO_LOGIN);
+      router.replace(nextPath);
+    } catch {
+      setFormData(DEMO_LOGIN);
+      setFormError(
+        "Demo login is ready, but the seeded API user is not reachable. Start the API and seed data, then try again.",
+      );
+    } finally {
+      setDemoLoading(false);
     }
   }
 
   return (
     <AuthShell
       title="Welcome back"
-      subtitle="Sign in to Malachitex to continue trading and manage your wallet workspace."
+      subtitle="Sign in to MalachiteX to continue trading and manage your wallet workspace."
       footer={
         <p>
           New to the platform?{" "}
@@ -139,10 +174,22 @@ export default function LoginPage() {
 
         {formError ? <Alert variant="error">{formError}</Alert> : null}
 
-        <Button className="w-full" type="submit" disabled={loading}>
+        <Button
+          className="w-full gap-2"
+          type="button"
+          variant="outline"
+          disabled={loading || demoLoading}
+          onClick={handleDemoLogin}
+        >
+          <Sparkles className="h-4 w-4" />
+          {demoLoading ? "Opening demo..." : "Try Demo Account"}
+        </Button>
+
+        <Button className="w-full" type="submit" disabled={loading || demoLoading}>
           {loading ? "Signing in..." : "Sign in"}
         </Button>
       </form>
     </AuthShell>
   );
 }
+

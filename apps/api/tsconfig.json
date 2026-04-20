@@ -3,6 +3,7 @@
   "compilerOptions": {
     "outDir": "dist",
     "baseUrl": ".",
+    "types": ["node", "jest"],
     "paths": {
       "@/*": ["src/*"],
       "@p2p/types": ["../../packages/types/src/index.ts"]

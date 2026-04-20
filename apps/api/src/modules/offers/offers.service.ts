@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import { NotificationType, OfferStatus, Prisma } from "@prisma/client";
@@ -12,6 +13,8 @@ import { CreateOfferDto } from "./dto/create-offer.dto";
 
 @Injectable()
 export class OffersService {
+  private readonly logger = new Logger(OffersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
@@ -30,6 +33,7 @@ export class OffersService {
       minAmountMinor: bigint;
       maxAmountMinor: bigint;
       paymentMethod: string;
+      paymentDetails?: Prisma.JsonValue | null;
       terms: string | null;
       createdAt: Date;
       updatedAt: Date;
@@ -42,7 +46,20 @@ export class OffersService {
       priceMinor: offer.priceMinor.toString(),
       minAmountMinor: offer.minAmountMinor.toString(),
       maxAmountMinor: offer.maxAmountMinor.toString(),
+      paymentDetails: offer.paymentDetails ?? null,
     };
+  }
+
+  private buildPaymentDetails(dto: CreateOfferDto): Prisma.JsonObject | undefined {
+    const details: Prisma.JsonObject = {};
+
+    if (dto.paymentReceiverName) details.receiverName = dto.paymentReceiverName;
+    if (dto.paymentUpiId) details.upiId = dto.paymentUpiId;
+    if (dto.paymentBankName) details.bankName = dto.paymentBankName;
+    if (dto.paymentAccountNumber) details.accountNumber = dto.paymentAccountNumber;
+    if (dto.paymentIfsc) details.ifsc = dto.paymentIfsc;
+
+    return Object.keys(details).length > 0 ? details : undefined;
   }
 
   async listActive() {
@@ -71,9 +88,19 @@ export class OffersService {
   }
 
   async create(userId: string, dto: CreateOfferDto) {
-    if (dto.minAmountMinor >= dto.maxAmountMinor) {
+    const priceMinor = BigInt(dto.priceMinor);
+    const minAmountMinor = BigInt(dto.minAmountMinor);
+    const maxAmountMinor = BigInt(dto.maxAmountMinor);
+
+    if (priceMinor <= 0n || minAmountMinor <= 0n || maxAmountMinor <= 0n) {
+      throw new BadRequestException("Offer price and limits must be greater than zero");
+    }
+
+    if (minAmountMinor >= maxAmountMinor) {
       throw new BadRequestException("minAmountMinor must be lower than maxAmountMinor");
     }
+
+    const paymentDetails = this.buildPaymentDetails(dto);
 
     const offer = await this.prisma.offer.create({
       data: {
@@ -81,14 +108,17 @@ export class OffersService {
         type: dto.type,
         asset: dto.asset,
         fiatCurrency: dto.fiatCurrency,
-        priceMinor: BigInt(dto.priceMinor),
-        minAmountMinor: BigInt(dto.minAmountMinor),
-        maxAmountMinor: BigInt(dto.maxAmountMinor),
+        priceMinor,
+        minAmountMinor,
+        maxAmountMinor,
         paymentMethod: dto.paymentMethod,
+        paymentDetails,
         terms: dto.terms,
-      },
+      } as any,
       include: { user: { select: { username: true } } },
     });
+
+    this.logger.log(`Offer ${offer.id} created by ${userId}`);
 
     await this.auditService.log({
       actorId: userId,
@@ -115,8 +145,11 @@ export class OffersService {
     }
 
     const offer = await this.prisma.offer.findUnique({ where: { id } });
-    if (!offer || offer.status === OfferStatus.ARCHIVED || offer.status === OfferStatus.CLOSED) {
+    if (!offer) {
       throw new NotFoundException("Offer not found");
+    }
+    if (offer.status === OfferStatus.ARCHIVED || offer.status === OfferStatus.CLOSED) {
+      throw new BadRequestException("Archived offers cannot be modified");
     }
     if (offer.userId !== userId) {
       throw new ForbiddenException("Only offer owner can update status");
@@ -144,13 +177,18 @@ export class OffersService {
       data: { offerId: id, status },
     });
 
+    this.logger.log(`Offer ${id} status changed to ${status} by ${userId}`);
+
     return this.toResponse(updated);
   }
 
   async archive(userId: string, id: string) {
     const offer = await this.prisma.offer.findUnique({ where: { id } });
-    if (!offer || offer.status === OfferStatus.ARCHIVED || offer.status === OfferStatus.CLOSED) {
+    if (!offer) {
       throw new NotFoundException("Offer not found");
+    }
+    if (offer.status === OfferStatus.ARCHIVED || offer.status === OfferStatus.CLOSED) {
+      throw new BadRequestException("Archived offers cannot be modified");
     }
     if (offer.userId !== userId) {
       throw new ForbiddenException("Only offer owner can archive");
@@ -176,6 +214,8 @@ export class OffersService {
       message: `Offer ${id.slice(0, 8)} archived.`,
       data: { offerId: id },
     });
+
+    this.logger.log(`Offer ${id} archived by ${userId}`);
 
     return this.toResponse(archived);
   }

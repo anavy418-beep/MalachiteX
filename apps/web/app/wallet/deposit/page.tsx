@@ -54,7 +54,7 @@ export default function WalletDepositPage() {
       setRecords(DEMO_DEPOSITS);
       setWallet(DEMO_WALLET_SUMMARY);
       setIsDemo(true);
-      setError("Session token missing. Showing demo deposit data.");
+      setError("Showing demo deposit records. Use Try Demo to test an authenticated wallet flow.");
       setLoading(false);
       return;
     }

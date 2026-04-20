@@ -71,7 +71,7 @@ describe("AuthService", () => {
     service = new AuthService(prisma, jwtService, auditService);
   });
 
-  it("creates user on signup and returns tokens", async () => {
+  it("creates user on signup and returns issued tokens", async () => {
     jwtService.signAsync
       .mockResolvedValueOnce("access-token")
       .mockResolvedValueOnce("refresh-token");
@@ -92,8 +92,8 @@ describe("AuthService", () => {
       password: "Password123!",
     });
 
-    expect(result.tokens.accessToken).toBe("access-token");
-    expect(result.tokens.refreshToken).toBe("refresh-token");
+    expect(result.issuedTokens.accessToken).toBe("access-token");
+    expect(result.issuedTokens.refreshToken).toBe("refresh-token");
     expect(prisma.wallet.create).toHaveBeenCalled();
     expect(auditService.log).toHaveBeenCalledWith(
       expect.objectContaining({ action: "AUTH_SIGNUP" }),
@@ -136,7 +136,7 @@ describe("AuthService", () => {
     });
 
     expect(result.user.email).toBe("user@example.com");
-    expect(result.tokens.accessToken).toBe("access-token");
+    expect(result.issuedTokens.accessToken).toBe("access-token");
     expect(auditService.log).toHaveBeenCalledWith(
       expect.objectContaining({ action: "AUTH_LOGIN" }),
     );
@@ -201,7 +201,7 @@ describe("AuthService", () => {
       where: { id: "rt-1" },
       data: { revokedAt: expect.any(Date) },
     });
-    expect(result.tokens.accessToken).toBe("new-access-token");
-    expect(result.tokens.refreshToken).toBe("new-refresh-token");
+    expect(result.issuedTokens.accessToken).toBe("new-access-token");
+    expect(result.issuedTokens.refreshToken).toBe("new-refresh-token");
   });
 });

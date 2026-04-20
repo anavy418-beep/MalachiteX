@@ -94,6 +94,9 @@ export class WalletService {
     }
 
     const amount = BigInt(dto.amountMinor);
+    if (amount <= 0n) {
+      throw new BadRequestException("Deposit amount must be greater than zero");
+    }
 
     const result = await this.prisma.$transaction(async (tx) => {
       const deposit = await tx.deposit.create({
@@ -150,6 +153,9 @@ export class WalletService {
     }
 
     const amount = BigInt(dto.amountMinor);
+    if (amount <= 0n) {
+      throw new BadRequestException("Withdrawal amount must be greater than zero");
+    }
 
     if (wallet.availableBalanceMinor < amount) {
       throw new BadRequestException("Insufficient available balance");

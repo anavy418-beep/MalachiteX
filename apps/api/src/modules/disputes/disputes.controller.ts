@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post } from "@nestjs/common";
 import { Role } from "@prisma/client";
 import { CurrentUser, RequestUser } from "@/common/decorators/current-user.decorator";
 import { Roles } from "@/common/decorators/roles.decorator";
@@ -24,7 +24,7 @@ export class DisputesController {
   @Post(":id/resolve")
   resolve(
     @CurrentUser() user: RequestUser,
-    @Param("id") id: string,
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
     @Body() dto: ResolveDisputeDto,
   ) {
     return this.disputesService.resolve(user.userId, id, dto);

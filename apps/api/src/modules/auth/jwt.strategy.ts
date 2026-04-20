@@ -2,6 +2,8 @@ import { Injectable, UnauthorizedException } from "@nestjs/common";
 import { PassportStrategy } from "@nestjs/passport";
 import { Role } from "@prisma/client";
 import { ExtractJwt, Strategy } from "passport-jwt";
+import type { Request } from "express";
+import { ACCESS_TOKEN_COOKIE } from "./auth-cookie.util";
 
 interface AccessTokenPayload {
   sub: string;
@@ -14,14 +16,17 @@ interface AccessTokenPayload {
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor() {
-    const accessSecret = process.env.JWT_ACCESS_SECRET;
+    const accessSecret = process.env.JWT_ACCESS_SECRET ?? process.env.JWT_SECRET;
 
     if (!accessSecret) {
       throw new Error("JWT_ACCESS_SECRET is required");
     }
 
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        (request: Request) => request?.cookies?.[ACCESS_TOKEN_COOKIE] ?? null,
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ]),
       ignoreExpiration: false,
       secretOrKey: accessSecret,
     });

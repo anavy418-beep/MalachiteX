@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import { CurrentUser, RequestUser } from "@/common/decorators/current-user.decorator";
 import { TradesService } from "./trades.service";
 import { CreateTradeDto } from "./dto/create-trade.dto";
+import { MarkTradePaidDto } from "./dto/mark-trade-paid.dto";
 import { OpenTradeDisputeDto } from "./dto/open-trade-dispute.dto";
 
 @Controller("trades")
@@ -21,25 +22,35 @@ export class TradesController {
   }
 
   @Get(":id")
-  getOne(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+  getOne(@CurrentUser() user: RequestUser, @Param("id", new ParseUUIDPipe({ version: "4" })) id: string) {
     return this.tradesService.getByIdForParticipant(user.userId, user.role, id);
   }
 
   @Post(":id/mark-paid")
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
-  markPaid(@CurrentUser() user: RequestUser, @Param("id") id: string) {
-    return this.tradesService.markPaid(user.userId, id);
+  markPaid(
+    @CurrentUser() user: RequestUser,
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Body() dto: MarkTradePaidDto,
+  ) {
+    return this.tradesService.markPaid(user.userId, id, dto);
   }
 
   @Post(":id/release")
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
-  release(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+  release(
+    @CurrentUser() user: RequestUser,
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+  ) {
     return this.tradesService.releaseEscrow(user.userId, user.role, id);
   }
 
   @Post(":id/cancel")
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
-  cancel(@CurrentUser() user: RequestUser, @Param("id") id: string) {
+  cancel(
+    @CurrentUser() user: RequestUser,
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+  ) {
     return this.tradesService.cancelTrade(user.userId, id);
   }
 
@@ -47,9 +58,9 @@ export class TradesController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   dispute(
     @CurrentUser() user: RequestUser,
-    @Param("id") id: string,
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
     @Body() dto: OpenTradeDisputeDto,
   ) {
-    return this.tradesService.openDispute(user.userId, id, dto.reason);
+    return this.tradesService.openDispute(user.userId, id, dto);
   }
 }

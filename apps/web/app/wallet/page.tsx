@@ -34,7 +34,7 @@ export default function WalletPage() {
       if (!token) {
         setWallet(DEMO_WALLET_SUMMARY);
         setIsDemo(true);
-        setError("Session token missing. Showing demo wallet preview.");
+        setError("Showing the public wallet preview. Use Try Demo to load a signed-in wallet.");
         setLoading(false);
         return;
       }
@@ -102,7 +102,7 @@ export default function WalletPage() {
   return (
     <section className="space-y-6">
       <header className="space-y-2">
-        <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Malachitex Wallet</p>
+        <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">MalachiteX Wallet</p>
         <h1 className="text-3xl font-semibold text-white">Wallet Overview</h1>
         <p className="text-sm text-slate-400">Portfolio balances, deposit identity, and ledger visibility.</p>
       </header>
@@ -321,3 +321,4 @@ export default function WalletPage() {
     </section>
   );
 }
+

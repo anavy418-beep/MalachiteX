@@ -5,7 +5,42 @@ export interface TradeMessage {
   tradeId: string;
   senderId: string;
   body: string;
+  attachmentKey?: string | null;
   createdAt: string;
+}
+
+export interface PaymentInstructions {
+  method?: string;
+  receiverName?: string;
+  upiId?: string | null;
+  bankName?: string | null;
+  accountNumber?: string | null;
+  ifsc?: string | null;
+  fiatCurrency?: string;
+  amountMinor?: string;
+  note?: string;
+}
+
+export interface PaymentProof {
+  paymentReference?: string | null;
+  proofFileName?: string | null;
+  proofMimeType?: string | null;
+  proofUrl?: string | null;
+  uploadedAt?: string;
+}
+
+export interface TradeDispute {
+  id: string;
+  tradeId: string;
+  openedById: string;
+  reason: string;
+  evidenceKeys: string[];
+  status: string;
+  resolutionNote?: string | null;
+  resolvedById?: string | null;
+  resolvedAt?: string | null;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface TradeRecord {
@@ -16,6 +51,7 @@ export interface TradeRecord {
     asset: string;
     fiatCurrency: string;
     paymentMethod: string;
+    paymentDetails?: PaymentInstructions | null;
     terms?: string | null;
     minAmountMinor?: string;
     maxAmountMinor?: string;
@@ -27,8 +63,12 @@ export interface TradeRecord {
   fiatTotalMinor: string;
   escrowHeldMinor: string;
   status: string;
+  paymentInstructions?: PaymentInstructions | null;
+  paymentProof?: PaymentProof | null;
+  dispute?: TradeDispute | null;
   openedAt?: string;
   paidAt?: string | null;
+  sellerPaymentConfirmedAt?: string | null;
   releasedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
@@ -52,10 +92,20 @@ export const tradesService = {
     });
   },
 
-  markPaid(token: string, tradeId: string) {
+  markPaid(
+    token: string,
+    tradeId: string,
+    input: {
+      paymentReference?: string;
+      proofFileName?: string;
+      proofMimeType?: string;
+      proofUrl?: string;
+    },
+  ) {
     return apiRequest<TradeRecord>(`/trades/${tradeId}/mark-paid`, {
       method: "POST",
       token,
+      body: JSON.stringify(input),
     });
   },
 
@@ -73,16 +123,21 @@ export const tradesService = {
     });
   },
 
-  openDispute(token: string, tradeId: string, reason: string) {
+  openDispute(
+    token: string,
+    tradeId: string,
+    reason: string,
+    input?: { paymentReference?: string; proofFileName?: string; proofUrl?: string; evidenceKeys?: string[] },
+  ) {
     return apiRequest(`/trades/${tradeId}/dispute`, {
       method: "POST",
       token,
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({ reason, ...input }),
     }).catch(() =>
       apiRequest(`/disputes`, {
         method: "POST",
         token,
-        body: JSON.stringify({ tradeId, reason }),
+        body: JSON.stringify({ tradeId, reason, ...input }),
       }),
     );
   },

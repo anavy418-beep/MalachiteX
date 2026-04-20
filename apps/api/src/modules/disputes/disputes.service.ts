@@ -49,13 +49,20 @@ export class DisputesService {
       throw new BadRequestException("Trade status not eligible for dispute");
     }
 
+    const evidenceKeys = [
+      ...(dto.evidenceKeys ?? []),
+      dto.proofFileName ? `mock-dispute-proof:${dto.proofFileName}` : undefined,
+      dto.proofUrl ? `proof-url:${dto.proofUrl}` : undefined,
+      dto.paymentReference ? `payment-reference:${dto.paymentReference}` : undefined,
+    ].filter((entry): entry is string => Boolean(entry));
+
     const dispute = await this.prisma.$transaction(async (tx) => {
       const created = await tx.dispute.create({
         data: {
           tradeId: trade.id,
           openedById: userId,
           reason: dto.reason,
-          evidenceKeys: dto.evidenceKeys ?? [],
+          evidenceKeys,
           status: DisputeStatus.OPEN,
         },
       });
@@ -65,13 +72,22 @@ export class DisputesService {
         data: { status: TradeStatus.DISPUTED },
       });
 
+      await tx.tradeMessage.create({
+        data: {
+          tradeId: trade.id,
+          senderId: userId,
+          body: `[System] Dispute opened. Reason: ${dto.reason}. Keep all payment proof and timeline updates in this chat.`,
+          attachmentKey: dto.proofUrl,
+        },
+      });
+
       await this.auditService.log(
         {
           actorId: userId,
           action: "DISPUTE_OPENED",
           entityType: "Dispute",
           entityId: created.id,
-          payload: { tradeId: trade.id },
+          payload: { tradeId: trade.id, evidenceCount: evidenceKeys.length },
         },
         tx,
       );
@@ -97,12 +113,14 @@ export class DisputesService {
     return dispute;
   }
 
-  listMine(userId: string) {
-    return this.prisma.dispute.findMany({
+  async listMine(userId: string) {
+    const disputes = await this.prisma.dispute.findMany({
       where: { OR: [{ openedById: userId }, { trade: { buyerId: userId } }, { trade: { sellerId: userId } }] },
-      include: { trade: true },
+      include: { trade: { include: { offer: true } } },
       orderBy: { createdAt: "desc" },
     });
+
+    return disputes.map((dispute) => this.toResponse(dispute));
   }
 
   async resolve(adminId: string, id: string, dto: ResolveDisputeDto) {
@@ -168,11 +186,48 @@ export class DisputesService {
     return resolved;
   }
 
-  listOpenDisputes() {
-    return this.prisma.dispute.findMany({
+  async listOpenDisputes() {
+    const disputes = await this.prisma.dispute.findMany({
       where: { status: { in: [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW] } },
-      include: { trade: true },
+      include: {
+        openedBy: { select: { id: true, username: true, email: true } },
+        trade: {
+          include: {
+            offer: true,
+            buyer: { select: { id: true, username: true, email: true } },
+            seller: { select: { id: true, username: true, email: true } },
+            messages: { orderBy: { createdAt: "asc" }, take: 50 },
+          },
+        },
+      },
       orderBy: { createdAt: "asc" },
     });
+
+    return disputes.map((dispute) => this.toResponse(dispute));
+  }
+
+  private toResponse(dispute: any) {
+    if (!dispute.trade) return dispute;
+
+    return {
+      ...dispute,
+      trade: {
+        ...dispute.trade,
+        amountMinor: dispute.trade.amountMinor?.toString?.() ?? dispute.trade.amountMinor,
+        fiatPriceMinor: dispute.trade.fiatPriceMinor?.toString?.() ?? dispute.trade.fiatPriceMinor,
+        fiatTotalMinor: dispute.trade.fiatTotalMinor?.toString?.() ?? dispute.trade.fiatTotalMinor,
+        escrowHeldMinor: dispute.trade.escrowHeldMinor?.toString?.() ?? dispute.trade.escrowHeldMinor,
+        offer: dispute.trade.offer
+          ? {
+              ...dispute.trade.offer,
+              priceMinor: dispute.trade.offer.priceMinor?.toString?.() ?? dispute.trade.offer.priceMinor,
+              minAmountMinor:
+                dispute.trade.offer.minAmountMinor?.toString?.() ?? dispute.trade.offer.minAmountMinor,
+              maxAmountMinor:
+                dispute.trade.offer.maxAmountMinor?.toString?.() ?? dispute.trade.offer.maxAmountMinor,
+            }
+          : undefined,
+      },
+    };
   }
 }

@@ -1,8 +1,7 @@
-export const ACCESS_TOKEN_KEY = "accessToken";
-export const REFRESH_TOKEN_KEY = "refreshToken";
-
 export const ACCESS_TOKEN_COOKIE = "p2p_at";
 export const REFRESH_TOKEN_COOKIE = "p2p_rt";
+export const SESSION_COOKIE = "p2p_session";
+export const SESSION_TOKEN_PLACEHOLDER = "__cookie_session__";
 
 export const AUTH_ROUTE_PATHS = [
   "/login",

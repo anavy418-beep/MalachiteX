@@ -1,17 +1,24 @@
 import {
-  ACCESS_TOKEN_COOKIE,
-  ACCESS_TOKEN_KEY,
-  REFRESH_TOKEN_COOKIE,
-  REFRESH_TOKEN_KEY,
+  SESSION_COOKIE,
+  SESSION_TOKEN_PLACEHOLDER,
 } from "./auth-constants";
+import { friendlyErrorMessage } from "./errors";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000/api";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+
+if (!API_BASE_URL && process.env.NODE_ENV === "production") {
+  throw new Error("NEXT_PUBLIC_API_BASE_URL must be configured in production.");
+}
+
+const RESOLVED_API_BASE_URL = API_BASE_URL || "http://localhost:4000/api";
 
 type ApiEnvelope<T> = {
   success: boolean;
   message: string;
   data: T;
   timestamp: string;
+  errors?: string[];
+  statusCode?: number;
 };
 
 interface RequestOptions extends RequestInit {
@@ -19,15 +26,17 @@ interface RequestOptions extends RequestInit {
   skipAuthRefresh?: boolean;
 }
 
-let refreshInFlight: Promise<string | null> | null = null;
+let refreshInFlight: Promise<boolean> | null = null;
+const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
+  "/auth/login",
+  "/auth/signup",
+  "/auth/refresh",
+  "/auth/forgot-password",
+  "/auth/reset-password",
+]);
 
 function isBrowser() {
   return typeof window !== "undefined";
-}
-
-function setCookie(name: string, value: string, maxAgeSeconds: number) {
-  if (!isBrowser()) return;
-  document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax`;
 }
 
 function getCookie(name: string): string | null {
@@ -39,8 +48,12 @@ function getCookie(name: string): string | null {
     .find((part) => part.startsWith(`${name}=`));
 
   if (!cookie) return null;
-
   return decodeURIComponent(cookie.split("=").slice(1).join("="));
+}
+
+function setCookie(name: string, value: string, maxAgeSeconds: number) {
+  if (!isBrowser()) return;
+  document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax`;
 }
 
 function clearCookie(name: string) {
@@ -49,12 +62,7 @@ function clearCookie(name: string) {
 }
 
 function unwrapData<T>(payload: unknown): T {
-  if (
-    payload &&
-    typeof payload === "object" &&
-    "success" in payload &&
-    "data" in payload
-  ) {
+  if (payload && typeof payload === "object" && "success" in payload && "data" in payload) {
     return (payload as ApiEnvelope<T>).data;
   }
 
@@ -69,40 +77,28 @@ async function parsePayload(response: Response): Promise<unknown> {
   }
 }
 
-async function rotateAccessToken(): Promise<string | null> {
-  const refreshToken = tokenStore.refreshToken;
-
-  if (!refreshToken) {
-    return null;
+async function rotateAccessToken(): Promise<boolean> {
+  if (!tokenStore.hasSessionMarker()) {
+    return false;
   }
 
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
-      const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+      const response = await fetch(`${RESOLVED_API_BASE_URL}/auth/refresh`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ refreshToken }),
         cache: "no-store",
+        credentials: "include",
       });
 
       if (!response.ok) {
         tokenStore.clear();
-        return null;
+        return false;
       }
 
-      const payload = await parsePayload(response);
-      const data = unwrapData<{ tokens: { accessToken: string; refreshToken: string } }>(payload);
-
-      if (!data?.tokens?.accessToken || !data?.tokens?.refreshToken) {
-        tokenStore.clear();
-        return null;
-      }
-
-      tokenStore.accessToken = data.tokens.accessToken;
-      tokenStore.refreshToken = data.tokens.refreshToken;
-      return data.tokens.accessToken;
+      return true;
     })().finally(() => {
       refreshInFlight = null;
     });
@@ -113,7 +109,8 @@ async function rotateAccessToken(): Promise<string | null> {
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers ?? {});
-  const authToken = options.token ?? tokenStore.accessToken;
+  const authToken =
+    options.token && options.token !== SESSION_TOKEN_PLACEHOLDER ? options.token : null;
 
   if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
@@ -123,19 +120,23 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     headers.set("Authorization", `Bearer ${authToken}`);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${RESOLVED_API_BASE_URL}${path}`, {
     ...options,
     headers,
     cache: "no-store",
+    credentials: "include",
   });
 
-  if (response.status === 401 && !options.skipAuthRefresh) {
-    const renewedAccessToken = await rotateAccessToken();
+  if (
+    response.status === 401 &&
+    !options.skipAuthRefresh &&
+    !AUTH_REFRESH_EXCLUDED_PATHS.has(path)
+  ) {
+    const renewed = await rotateAccessToken();
 
-    if (renewedAccessToken) {
+    if (renewed) {
       return apiRequest<T>(path, {
         ...options,
-        token: renewedAccessToken,
         skipAuthRefresh: true,
       });
     }
@@ -153,7 +154,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
         ? String((payload as { message?: unknown }).message ?? "Request failed")
         : "Request failed";
 
-    throw new Error(errorMessage);
+    throw new Error(friendlyErrorMessage(errorMessage));
   }
 
   return unwrapData<T>(payload);
@@ -161,37 +162,31 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
 export const tokenStore = {
   get accessToken(): string | null {
-    if (!isBrowser()) return null;
-    return localStorage.getItem(ACCESS_TOKEN_KEY) ?? getCookie(ACCESS_TOKEN_COOKIE);
+    return this.hasSessionMarker() ? SESSION_TOKEN_PLACEHOLDER : null;
   },
   set accessToken(value: string | null) {
-    if (!isBrowser()) return;
     if (!value) {
-      localStorage.removeItem(ACCESS_TOKEN_KEY);
-      clearCookie(ACCESS_TOKEN_COOKIE);
+      clearCookie(SESSION_COOKIE);
       return;
     }
 
-    localStorage.setItem(ACCESS_TOKEN_KEY, value);
-    setCookie(ACCESS_TOKEN_COOKIE, value, 15 * 60);
+    setCookie(SESSION_COOKIE, "1", 7 * 24 * 60 * 60);
   },
   get refreshToken(): string | null {
-    if (!isBrowser()) return null;
-    return localStorage.getItem(REFRESH_TOKEN_KEY) ?? getCookie(REFRESH_TOKEN_COOKIE);
+    return this.hasSessionMarker() ? SESSION_TOKEN_PLACEHOLDER : null;
   },
   set refreshToken(value: string | null) {
-    if (!isBrowser()) return;
     if (!value) {
-      localStorage.removeItem(REFRESH_TOKEN_KEY);
-      clearCookie(REFRESH_TOKEN_COOKIE);
+      clearCookie(SESSION_COOKIE);
       return;
     }
 
-    localStorage.setItem(REFRESH_TOKEN_KEY, value);
-    setCookie(REFRESH_TOKEN_COOKIE, value, 7 * 24 * 60 * 60);
+    setCookie(SESSION_COOKIE, "1", 7 * 24 * 60 * 60);
+  },
+  hasSessionMarker() {
+    return Boolean(getCookie(SESSION_COOKIE));
   },
   clear() {
-    this.accessToken = null;
-    this.refreshToken = null;
+    clearCookie(SESSION_COOKIE);
   },
 };

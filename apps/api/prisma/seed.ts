@@ -330,7 +330,7 @@ async function main() {
         {
           tradeId: trade.id,
           senderId: alice.id,
-          body: "[Demo Bot] Hello, I am the demo trade assistant.",
+          body: "[Trade Assistant] Hello, I am the trade assistant.",
         },
       ],
     });

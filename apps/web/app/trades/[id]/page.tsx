@@ -2,46 +2,41 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { io, type Socket } from "socket.io-client";
+import { io } from "socket.io-client";
 import {
   AlertCircle,
   Bot,
   CheckCircle2,
   ChevronDown,
+  FileImage,
   MessageSquare,
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 import { tokenStore } from "@/lib/api";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
+import { normalizeTradeStatus, type CanonicalTradeStatus, tradeStatusLabel } from "@/lib/status";
 import { tradesService, type TradeRecord, type TradeMessage } from "@/services/trades.service";
 import { useAuth } from "@/hooks/use-auth";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { LoadingState } from "@/components/ui/loading-state";
 
-type TradeUiStatus =
-  | "OPEN"
-  | "PAYMENT_PENDING"
-  | "PAYMENT_SENT"
-  | "RELEASE_PENDING"
-  | "COMPLETED"
-  | "CANCELLED"
-  | "DISPUTED";
+const API_SOCKET_URL = process.env.NEXT_PUBLIC_API_SOCKET_URL ?? "";
+
+if (!API_SOCKET_URL && process.env.NODE_ENV === "production") {
+  throw new Error("NEXT_PUBLIC_API_SOCKET_URL must be configured in production.");
+}
+
+const RESOLVED_API_SOCKET_URL = API_SOCKET_URL || "http://localhost:4000";
+
+type TradeUiStatus = CanonicalTradeStatus;
 
 type RenderMessageKind = "system" | "user" | "counterparty" | "bot";
 
 function mapTradeStatus(rawStatus: string): TradeUiStatus {
-  const normalized = rawStatus.toUpperCase();
-
-  if (normalized === "OPEN") return "OPEN";
-  if (normalized === "PAYMENT_PENDING" || normalized === "PENDING_PAYMENT") return "PAYMENT_PENDING";
-  if (normalized === "PAYMENT_SENT" || normalized === "PAID") return "PAYMENT_SENT";
-  if (normalized === "RELEASE_PENDING") return "RELEASE_PENDING";
-  if (normalized === "COMPLETED" || normalized.includes("RELEASE")) return "COMPLETED";
-  if (normalized.includes("CANCEL")) return "CANCELLED";
-  if (normalized.includes("DISPUT")) return "DISPUTED";
-  return "PAYMENT_PENDING";
+  return normalizeTradeStatus(rawStatus);
 }
 
 function statusBadge(uiStatus: TradeUiStatus) {
@@ -53,19 +48,9 @@ function statusBadge(uiStatus: TradeUiStatus) {
   return "border-zinc-700/60 bg-zinc-900/60 text-slate-300";
 }
 
-function uiStatusLabel(uiStatus: TradeUiStatus) {
-  if (uiStatus === "PAYMENT_PENDING") return "PAYMENT_PENDING";
-  if (uiStatus === "PAYMENT_SENT") return "PAYMENT_SENT";
-  if (uiStatus === "RELEASE_PENDING") return "RELEASE_PENDING";
-  if (uiStatus === "COMPLETED") return "COMPLETED";
-  if (uiStatus === "CANCELLED") return "CANCELLED";
-  if (uiStatus === "DISPUTED") return "DISPUTED";
-  return "OPEN";
-}
-
 function inferChatKind(message: TradeMessage, currentUserId?: string): RenderMessageKind {
   if (message.senderId === "__SYSTEM__" || message.body.startsWith("[System]")) return "system";
-  if (message.body.startsWith("[Demo Bot]")) return "bot";
+  if (message.body.startsWith("[Demo Bot]") || message.body.startsWith("[Trade Assistant]")) return "bot";
   if (message.senderId === currentUserId) return "user";
   return "counterparty";
 }
@@ -73,6 +58,9 @@ function inferChatKind(message: TradeMessage, currentUserId?: string): RenderMes
 function cleanBody(message: TradeMessage) {
   if (message.body.startsWith("[Demo Bot]")) {
     return message.body.replace("[Demo Bot]", "").trim();
+  }
+  if (message.body.startsWith("[Trade Assistant]")) {
+    return message.body.replace("[Trade Assistant]", "").trim();
   }
   if (message.body.startsWith("[System]")) {
     return message.body.replace("[System]", "").trim();
@@ -82,7 +70,7 @@ function cleanBody(message: TradeMessage) {
 
 function messageLabel(kind: RenderMessageKind, trade: TradeRecord, message: TradeMessage, currentUserId?: string) {
   if (kind === "system") return "System";
-  if (kind === "bot") return "Demo Assistant";
+  if (kind === "bot") return "Trade Assistant";
   if (kind === "user") return "You";
   if (message.senderId === trade.buyerId) return "Buyer";
   if (message.senderId === trade.sellerId) return "Seller";
@@ -90,11 +78,56 @@ function messageLabel(kind: RenderMessageKind, trade: TradeRecord, message: Trad
 }
 
 function stepIndexForStatus(uiStatus: TradeUiStatus) {
-  if (uiStatus === "CANCELLED" || uiStatus === "DISPUTED") return 1;
+  if (uiStatus === "CANCELLED") return 0;
+  if (uiStatus === "DISPUTED") return 1;
   if (uiStatus === "COMPLETED") return 3;
-  if (uiStatus === "PAYMENT_SENT" || uiStatus === "RELEASE_PENDING") return 2;
-  if (uiStatus === "PAYMENT_PENDING") return 1;
+  if (uiStatus === "RELEASE_PENDING") return 2;
+  if (uiStatus === "PAYMENT_SENT") return 1;
   return 0;
+}
+
+function paymentValue(value: string | null | undefined) {
+  return value && value.trim().length > 0 ? value : "Not provided";
+}
+
+function statusSummary(uiStatus: TradeUiStatus) {
+  if (uiStatus === "PAYMENT_PENDING") return "Buyer still needs to submit payment proof.";
+  if (uiStatus === "PAYMENT_SENT") return "Payment proof submitted. Seller verification is required.";
+  if (uiStatus === "RELEASE_PENDING") return "Payment acknowledged. Escrow release is pending settlement.";
+  if (uiStatus === "COMPLETED") return "Escrow released and trade settled.";
+  if (uiStatus === "CANCELLED") return "Trade cancelled and escrow refunded to seller.";
+  if (uiStatus === "DISPUTED") return "Dispute opened. Resolution will follow dispute review flow.";
+  return "Trade status available.";
+}
+
+function parseDisputeEvidence(evidenceKeys: string[]) {
+  const paymentReferences: string[] = [];
+  const proofFiles: string[] = [];
+  const proofUrls: string[] = [];
+  const other: string[] = [];
+
+  evidenceKeys.forEach((entry) => {
+    if (entry.startsWith("payment-reference:")) {
+      paymentReferences.push(entry.replace("payment-reference:", ""));
+      return;
+    }
+    if (entry.startsWith("mock-dispute-proof:")) {
+      proofFiles.push(entry.replace("mock-dispute-proof:", ""));
+      return;
+    }
+    if (entry.startsWith("proof-url:")) {
+      proofUrls.push(entry.replace("proof-url:", ""));
+      return;
+    }
+    other.push(entry);
+  });
+
+  return {
+    paymentReferences,
+    proofFiles,
+    proofUrls,
+    other,
+  };
 }
 
 export default function TradePage() {
@@ -107,30 +140,65 @@ export default function TradePage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [paymentReference, setPaymentReference] = useState("");
+  const [paymentProofFile, setPaymentProofFile] = useState<File | null>(null);
+  const [paymentProofUrl, setPaymentProofUrl] = useState("");
+  const [disputeReason, setDisputeReason] = useState("Payment confirmation mismatch.");
+  const [disputeReference, setDisputeReference] = useState("");
+  const [disputeProofFile, setDisputeProofFile] = useState<File | null>(null);
+  const [disputeProofUrl, setDisputeProofUrl] = useState("");
 
   const token = tokenStore.accessToken;
   const uiStatus = mapTradeStatus(trade?.status ?? "OPEN");
 
   const isBuyer = !!trade && user?.id === trade.buyerId;
   const isSeller = !!trade && user?.id === trade.sellerId;
-  const canMarkPaid = (uiStatus === "OPEN" || uiStatus === "PAYMENT_PENDING") && isBuyer;
-  const canRelease = uiStatus === "PAYMENT_SENT" && isSeller;
-  const canCancel = (uiStatus === "OPEN" || uiStatus === "PAYMENT_PENDING") && !!trade && (isBuyer || isSeller);
+  const hasPaymentProofInput =
+    paymentReference.trim().length > 0 ||
+    paymentProofUrl.trim().length > 0 ||
+    Boolean(paymentProofFile);
+  const canMarkPaid = uiStatus === "PAYMENT_PENDING" && isBuyer && hasPaymentProofInput;
+  const canRelease = uiStatus === "PAYMENT_SENT" && isSeller && Boolean(trade?.paymentProof);
+  const canCancel = uiStatus === "PAYMENT_PENDING" && !!trade && (isBuyer || isSeller);
   const canDispute =
     !!trade &&
+    (isBuyer || isSeller) &&
     (uiStatus === "PAYMENT_PENDING" || uiStatus === "PAYMENT_SENT" || uiStatus === "RELEASE_PENDING");
+  const markPaidDisabledReason = !isBuyer
+    ? "Only buyer can mark payment as sent."
+    : uiStatus !== "PAYMENT_PENDING"
+      ? "Payment proof can be submitted only while payment is pending."
+      : !hasPaymentProofInput
+        ? "Add reference ID or proof before marking payment."
+        : null;
+  const releaseDisabledReason = !isSeller
+    ? "Only seller can release escrow."
+    : uiStatus !== "PAYMENT_SENT"
+      ? "Escrow release is available after payment is submitted."
+      : !trade?.paymentProof
+        ? "Payment proof must be available before release."
+        : null;
+  const cancelDisabledReason =
+    !trade || !(isBuyer || isSeller)
+      ? "Only trade participants can cancel."
+      : uiStatus !== "PAYMENT_PENDING"
+        ? "Cancel is available only before payment is sent."
+        : null;
+  const disputeDisabledReason = !canDispute
+    ? "Dispute is available during payment and release stages."
+    : null;
 
-  const socket = useMemo<Socket | null>(() => {
+  const socket = useMemo<any>(() => {
     if (!token) return null;
 
-    return io(process.env.NEXT_PUBLIC_API_SOCKET_URL ?? "http://localhost:4000", {
+    return io(RESOLVED_API_SOCKET_URL, {
       auth: { token },
     });
   }, [token]);
 
   async function loadTrade() {
     if (!token) {
-      setError("Session token missing.");
+      setError("Please sign in to open this P2P trade workspace.");
       setLoading(false);
       return;
     }
@@ -177,7 +245,15 @@ export default function TradePage() {
     setError(null);
 
     try {
-      await tradesService.markPaid(token, trade.id);
+      await tradesService.markPaid(token, trade.id, {
+        paymentReference,
+        proofFileName: paymentProofFile?.name,
+        proofMimeType: paymentProofFile?.type,
+        proofUrl: paymentProofUrl || undefined,
+      });
+      setPaymentReference("");
+      setPaymentProofFile(null);
+      setPaymentProofUrl("");
       await loadTrade();
     } catch (err) {
       setError((err as Error).message);
@@ -222,7 +298,14 @@ export default function TradePage() {
     setError(null);
 
     try {
-      await tradesService.openDispute(token, trade.id, "Demo dispute: payment confirmation mismatch.");
+      await tradesService.openDispute(token, trade.id, disputeReason, {
+        paymentReference: disputeReference || trade.paymentProof?.paymentReference || undefined,
+        proofFileName: disputeProofFile?.name,
+        proofUrl: disputeProofUrl || undefined,
+        evidenceKeys: trade.paymentProof?.proofUrl ? [trade.paymentProof.proofUrl] : undefined,
+      });
+      setDisputeProofFile(null);
+      setDisputeProofUrl("");
       await loadTrade();
     } catch (err) {
       setError((err as Error).message);
@@ -254,7 +337,7 @@ export default function TradePage() {
     }
   }
 
-  async function runDemoBot() {
+  async function runTradeAssistant() {
     if (!token || !trade) return;
 
     setSubmitting(true);
@@ -278,7 +361,7 @@ export default function TradePage() {
         id: `sys-${trade.id}`,
         tradeId: trade.id,
         senderId: "__SYSTEM__",
-        body: "[System] Escrow is active. Keep all communication and payment proof inside this trade.",
+        body: "[System] Escrow is active. Keep all payment references, proof, and release confirmations inside this P2P trade.",
         createdAt: trade.createdAt ?? new Date().toISOString(),
       },
     ];
@@ -287,14 +370,16 @@ export default function TradePage() {
   }, [trade, messages]);
 
   if (loading) {
-    return <p className="text-sm text-slate-400">Loading trade workspace...</p>;
+    return <LoadingState label="Opening trade workspace" />;
   }
 
   if (!trade) {
     return (
       <section className="space-y-3">
         <h1 className="text-2xl font-semibold text-white">Trade Not Available</h1>
-        <p className="text-sm text-slate-400">Unable to load this trade.</p>
+        <p className="text-sm text-slate-400">
+          This trade workspace is not available for the current session.
+        </p>
         {error ? <Alert variant="error">{error}</Alert> : null}
       </section>
     );
@@ -303,8 +388,10 @@ export default function TradePage() {
   const counterpartyId = isBuyer ? trade.sellerId : trade.buyerId;
   const merchantLabel = `Trader ${counterpartyId.slice(0, 6).toUpperCase()}`;
   const paymentMethod = trade.offer?.paymentMethod ?? "Bank Transfer";
+  const paymentInstructions = trade.paymentInstructions ?? trade.offer?.paymentDetails ?? {};
+  const paymentProof = trade.paymentProof;
   const settlementAsset = trade.offer?.asset ?? "USDT";
-  const fiatCurrency = trade.offer?.fiatCurrency ?? "INR";
+  const fiatCurrency = paymentInstructions.fiatCurrency ?? trade.offer?.fiatCurrency ?? "INR";
   const offerTerms =
     trade.offer?.terms?.trim() ||
     "Only release after confirmed payment in your account. Keep proof in chat for disputes.";
@@ -314,8 +401,9 @@ export default function TradePage() {
           trade.offer.maxAmountMinor,
           fiatCurrency,
         )}`
-      : "Demo limits available in offer";
+      : "Offer limits available in offer details";
   const statusStepIndex = stepIndexForStatus(uiStatus);
+  const disputeEvidence = trade.dispute ? parseDisputeEvidence(trade.dispute.evidenceKeys) : null;
 
   return (
     <section className="space-y-6">
@@ -324,9 +412,10 @@ export default function TradePage() {
         <h1 className="text-3xl font-semibold text-white">Trade {trade.id.slice(0, 12)}</h1>
         <div className="flex items-center gap-2">
           <span className={`inline-flex rounded-full border px-2 py-1 text-xs ${statusBadge(uiStatus)}`}>
-            {uiStatusLabel(uiStatus)}
+            {tradeStatusLabel(uiStatus)}
           </span>
         </div>
+        <p className="text-sm text-slate-400">{statusSummary(uiStatus)}</p>
       </header>
 
       {error ? <Alert variant="error">{error}</Alert> : null}
@@ -343,18 +432,83 @@ export default function TradePage() {
                 <CheckCircle2 className="mr-2 h-4 w-4" />
                 Mark as Paid
               </Button>
+              {!canMarkPaid && markPaidDisabledReason ? (
+                <p className="text-xs text-slate-500">{markPaidDisabledReason}</p>
+              ) : null}
               <Button onClick={handleRelease} disabled={!canRelease || submitting} className="w-full">
                 Release Crypto
               </Button>
+              {!canRelease && releaseDisabledReason ? (
+                <p className="text-xs text-slate-500">{releaseDisabledReason}</p>
+              ) : null}
               <Button onClick={handleCancel} disabled={!canCancel || submitting} variant="outline" className="w-full">
                 Cancel Trade
               </Button>
+              {!canCancel && cancelDisabledReason ? (
+                <p className="text-xs text-slate-500">{cancelDisabledReason}</p>
+              ) : null}
+              {canDispute ? (
+                <div className="space-y-2 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+                  <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
+                    Dispute reason
+                    <textarea
+                      value={disputeReason}
+                      onChange={(event) => setDisputeReason(event.target.value)}
+                      className="min-h-20 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm normal-case text-slate-100 outline-none ring-emerald-500 focus:ring-2"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
+                    Evidence reference
+                    <input
+                      value={disputeReference}
+                      onChange={(event) => setDisputeReference(event.target.value)}
+                      className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm normal-case text-slate-100 outline-none ring-emerald-500 focus:ring-2"
+                      placeholder="Optional"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
+                    Evidence file
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      onChange={(event) => setDisputeProofFile(event.target.files?.[0] ?? null)}
+                      className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm normal-case text-slate-100"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
+                    Evidence URL
+                    <input
+                      value={disputeProofUrl}
+                      onChange={(event) => setDisputeProofUrl(event.target.value)}
+                      className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm normal-case text-slate-100 outline-none ring-emerald-500 focus:ring-2"
+                      placeholder="Optional proof link"
+                    />
+                  </label>
+                </div>
+              ) : null}
               <Button onClick={handleDispute} disabled={!canDispute || submitting} variant="outline" className="w-full">
                 <ShieldAlert className="mr-2 h-4 w-4" />
                 Open Dispute
               </Button>
+              {!canDispute && disputeDisabledReason ? (
+                <p className="text-xs text-slate-500">{disputeDisabledReason}</p>
+              ) : null}
             </CardContent>
           </Card>
+
+          {isSeller && uiStatus === "PAYMENT_SENT" ? (
+            <Card className="border-lime-800/40 bg-lime-950/20">
+              <CardHeader>
+                <CardTitle className="text-lg">Seller Verification</CardTitle>
+                <CardDescription>Buyer marked payment as sent. Confirm funds before release.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm text-lime-100">
+                <p>1. Check your bank/UPI app for incoming funds.</p>
+                <p>2. Match amount and payment reference in this workspace.</p>
+                <p>3. Release only after your own account confirms settlement.</p>
+              </CardContent>
+            </Card>
+          ) : null}
 
           <Card>
             <CardHeader>
@@ -370,14 +524,103 @@ export default function TradePage() {
                 Payment method: <span className="font-semibold text-slate-100">{paymentMethod}</span>
               </p>
               <p>
+                Receiver:{" "}
+                <span className="font-semibold text-slate-100">
+                  {paymentValue(paymentInstructions.receiverName)}
+                </span>
+              </p>
+              <p>
+                UPI ID:{" "}
+                <span className="font-semibold text-slate-100">{paymentValue(paymentInstructions.upiId)}</span>
+              </p>
+              <p>
+                Bank:{" "}
+                <span className="font-semibold text-slate-100">
+                  {paymentValue(paymentInstructions.bankName)}
+                </span>
+              </p>
+              <p>
+                Account / IFSC:{" "}
+                <span className="font-semibold text-slate-100">
+                  {paymentValue(paymentInstructions.accountNumber)} / {paymentValue(paymentInstructions.ifsc)}
+                </span>
+              </p>
+              <p>
                 Asset to receive:{" "}
                 <span className="font-semibold text-emerald-300">
                   {formatMinorUnits(trade.amountMinor, settlementAsset)}
                 </span>
               </p>
+              {paymentInstructions.note ? (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 text-xs text-slate-300">
+                  Note: {paymentInstructions.note}
+                </div>
+              ) : null}
               <div className="rounded-lg border border-emerald-800/30 bg-emerald-950/20 p-2 text-xs text-emerald-200">
-                Escrow protection: funds are held in-platform and released only after payment confirmation.
+                Escrow protection: seller should verify payment in their own account before release.
               </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Payment Proof</CardTitle>
+              <CardDescription>Buyer must attach a reference or screenshot before marking paid.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-slate-300">
+              {paymentProof ? (
+                <div className="rounded-lg border border-lime-800/40 bg-lime-950/20 p-3">
+                  <p className="font-medium text-lime-200">Proof submitted</p>
+                  <p className="mt-1">Reference: {paymentValue(paymentProof.paymentReference)}</p>
+                  <p>File: {paymentValue(paymentProof.proofFileName)}</p>
+                  <p>Stored at: {paymentValue(paymentProof.proofUrl)}</p>
+                  <p>Submitted: {paymentProof.uploadedAt ? formatDateTime(paymentProof.uploadedAt) : "Not provided"}</p>
+                </div>
+              ) : null}
+
+              {isSeller && uiStatus === "PAYMENT_SENT" && !paymentProof ? (
+                <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 p-3 text-amber-100">
+                  Buyer marked payment as sent, but proof details are missing. Ask buyer to update reference/proof before release.
+                </div>
+              ) : null}
+
+              {isBuyer && uiStatus === "PAYMENT_PENDING" ? (
+                <div className="space-y-3">
+                  <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
+                    Payment reference / UTR
+                    <input
+                      value={paymentReference}
+                      onChange={(event) => setPaymentReference(event.target.value)}
+                      className="h-10 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm normal-case text-slate-100 outline-none ring-emerald-500 focus:ring-2"
+                      placeholder="UPI ref, UTR, bank reference"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
+                    Screenshot
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      onChange={(event) => setPaymentProofFile(event.target.files?.[0] ?? null)}
+                      className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm normal-case text-slate-100"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs uppercase tracking-wide text-slate-500">
+                    Proof URL
+                    <input
+                      value={paymentProofUrl}
+                      onChange={(event) => setPaymentProofUrl(event.target.value)}
+                      className="h-10 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm normal-case text-slate-100 outline-none ring-emerald-500 focus:ring-2"
+                      placeholder="Optional link to payment proof"
+                    />
+                  </label>
+                  {paymentProofFile ? (
+                    <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 p-2 text-xs text-slate-300">
+                      <FileImage className="h-4 w-4 text-emerald-300" />
+                      {paymentProofFile.name}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -400,8 +643,8 @@ export default function TradePage() {
               <p>Offer ID: {trade.offerId}</p>
               <p>Settlement asset: {settlementAsset}</p>
               <p>Created: {trade.createdAt ? formatDateTime(trade.createdAt) : "-"}</p>
-              <p>Payment window: 15 minutes (demo)</p>
-              <p>Merchant completion: 98.4% (demo)</p>
+              <p>Payment window: 15 minutes (staging default)</p>
+              <p>Merchant completion: 98.4% (staging baseline)</p>
               <p>Trade limits: {tradeLimits}</p>
               <p>Payment method: {paymentMethod}</p>
             </div>
@@ -430,7 +673,7 @@ export default function TradePage() {
           <Card>
             <CardContent className="pt-6">
               <div className="grid gap-2 md:grid-cols-4">
-                {["Trade started", "Payment sent", "Awaiting release", "Completed"].map((step, index) => {
+                {["Payment Pending", "Payment Sent", "Release Pending", "Completed"].map((step, index) => {
                   const complete = index <= statusStepIndex;
                   return (
                     <div
@@ -457,6 +700,65 @@ export default function TradePage() {
             </CardContent>
           </Card>
 
+          {trade.dispute ? (
+            <Card className="border-amber-800/40 bg-amber-950/20">
+              <CardHeader>
+                <CardTitle className="text-lg">Dispute Review</CardTitle>
+                <CardDescription>Both sides can reference payment instructions, proof, and chat history.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm text-amber-100">
+                <p>Status: {trade.dispute.status.replace(/_/g, " ")}</p>
+                <p>Reason: {trade.dispute.reason}</p>
+                <p>Opened by: {trade.dispute.openedById === trade.buyerId ? "Buyer" : "Seller"}</p>
+                <p>Opened at: {formatDateTime(trade.dispute.createdAt)}</p>
+                {trade.dispute.resolvedAt ? (
+                  <p>Resolved at: {formatDateTime(trade.dispute.resolvedAt)}</p>
+                ) : null}
+                {trade.dispute.resolvedById ? (
+                  <p>Resolved by: {trade.dispute.resolvedById === trade.buyerId ? "Buyer" : trade.dispute.resolvedById === trade.sellerId ? "Seller" : "Admin"}</p>
+                ) : null}
+                {trade.dispute.resolutionNote ? <p>Resolution: {trade.dispute.resolutionNote}</p> : null}
+
+                <div className="mt-3 rounded-lg border border-amber-800/40 bg-amber-950/30 p-3">
+                  <p className="text-xs uppercase tracking-wide text-amber-300">Dispute Evidence</p>
+                  <div className="mt-2 space-y-1 text-xs text-amber-100">
+                    <p>
+                      References:{" "}
+                      {disputeEvidence && disputeEvidence.paymentReferences.length > 0
+                        ? disputeEvidence.paymentReferences.join(", ")
+                        : "None"}
+                    </p>
+                    <p>
+                      Files:{" "}
+                      {disputeEvidence && disputeEvidence.proofFiles.length > 0
+                        ? disputeEvidence.proofFiles.join(", ")
+                        : "None"}
+                    </p>
+                    <p>
+                      URLs:{" "}
+                      {disputeEvidence && disputeEvidence.proofUrls.length > 0
+                        ? disputeEvidence.proofUrls.join(", ")
+                        : "None"}
+                    </p>
+                    <p>
+                      Other:{" "}
+                      {disputeEvidence && disputeEvidence.other.length > 0
+                        ? disputeEvidence.other.join(", ")
+                        : "None"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-amber-800/30 bg-zinc-950/50 p-3 text-xs text-amber-100">
+                  <p className="uppercase tracking-wide text-amber-300">Payment Submission Evidence</p>
+                  <p className="mt-2">Reference: {paymentValue(trade.paymentProof?.paymentReference)}</p>
+                  <p>Proof file: {paymentValue(trade.paymentProof?.proofFileName)}</p>
+                  <p>Proof URL: {paymentValue(trade.paymentProof?.proofUrl)}</p>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
           <Card className="border-zinc-800 bg-zinc-950/60">
             <CardContent className="pt-6">
               <p className="flex items-center gap-2 text-xs text-slate-400">
@@ -472,7 +774,7 @@ export default function TradePage() {
                 <MessageSquare className="h-5 w-5 text-emerald-300" />
                 Trade Chat
               </CardTitle>
-              <CardDescription>System updates, participant chat, and deterministic demo assistant replies.</CardDescription>
+              <CardDescription>P2P-only conversation with payment references, proof updates, and safety reminders.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="max-h-[30rem] space-y-2 overflow-auto rounded-xl border border-zinc-800 bg-zinc-950/50 p-3">
@@ -501,6 +803,11 @@ export default function TradePage() {
                         <span className="text-slate-500">{formatDateTime(message.createdAt)}</span>
                       </div>
                       <p className="text-sm">{cleanBody(message)}</p>
+                      {message.attachmentKey ? (
+                        <p className="mt-2 rounded-md border border-zinc-700/60 bg-zinc-950/50 px-2 py-1 text-xs text-slate-400">
+                          Attachment: {message.attachmentKey}
+                        </p>
+                      ) : null}
                     </article>
                   );
                 })}
@@ -518,9 +825,9 @@ export default function TradePage() {
                 </Button>
               </form>
 
-              <Button type="button" variant="outline" className="gap-2" onClick={runDemoBot} disabled={submitting}>
+              <Button type="button" variant="outline" className="gap-2" onClick={runTradeAssistant} disabled={submitting}>
                 <Bot className="h-4 w-4" />
-                Trigger Demo Assistant
+                Ask Trade Assistant
               </Button>
             </CardContent>
           </Card>
@@ -529,7 +836,7 @@ export default function TradePage() {
 
       <p className="flex items-center gap-1 text-xs text-slate-500">
         <AlertCircle className="h-3.5 w-3.5" />
-        Demo assistant is deterministic and intended for staging/testing only.
+        P2P reminder: only release escrow after payment is confirmed in your own account.
       </p>
     </section>
   );

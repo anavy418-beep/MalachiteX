@@ -1,12 +1,14 @@
 import { useMemo } from "react";
-import { tokenStore } from "@/lib/api";
+import { useAuth } from "@/hooks/use-auth";
 
 export function useAuthState() {
+  const { isAuthenticated, user } = useAuth();
+
   return useMemo(
     () => ({
-      isAuthenticated: Boolean(tokenStore.accessToken),
-      accessToken: tokenStore.accessToken,
+      isAuthenticated,
+      accessToken: user ? "__cookie_session__" : null,
     }),
-    [],
+    [isAuthenticated, user],
   );
 }

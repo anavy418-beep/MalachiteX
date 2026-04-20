@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from "@nestjs/common";
@@ -49,16 +50,17 @@ export interface PublicUser {
   createdAt: Date;
 }
 
-export interface AuthTokens {
+interface IssuedAuthTokens {
   accessToken: string;
   refreshToken: string;
-  tokenType: "Bearer";
-  accessTokenExpiresIn: string;
-  refreshTokenExpiresIn: string;
+  accessTokenExpiresAt: Date;
+  refreshTokenExpiresAt: Date;
 }
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -122,7 +124,7 @@ export class AuthService {
       return createdUser;
     });
 
-    const tokens = await this.issueTokenPair({
+    const issuedTokens = await this.issueTokenPair({
       id: user.id,
       email: user.email,
       role: user.role,
@@ -130,7 +132,7 @@ export class AuthService {
 
     return {
       user: this.toPublicUser(user),
-      tokens,
+      issuedTokens,
     };
   }
 
@@ -140,16 +142,18 @@ export class AuthService {
     });
 
     if (!user) {
+      await this.recordFailedLogin(dto.email, "user_not_found", context);
       throw new UnauthorizedException("Invalid credentials");
     }
 
     const validPassword = await bcrypt.compare(dto.password, user.passwordHash);
 
     if (!validPassword) {
+      await this.recordFailedLogin(dto.email, "invalid_password", context, user.id);
       throw new UnauthorizedException("Invalid credentials");
     }
 
-    const tokens = await this.issueTokenPair({
+    const issuedTokens = await this.issueTokenPair({
       id: user.id,
       email: user.email,
       role: user.role,
@@ -166,7 +170,7 @@ export class AuthService {
 
     return {
       user: this.toPublicUser(user),
-      tokens,
+      issuedTokens,
     };
   }
 
@@ -195,7 +199,11 @@ export class AuthService {
     return { loggedOut: true };
   }
 
-  async refresh(refreshToken: string, context?: AuthContext) {
+  async refresh(refreshToken: string | undefined, context?: AuthContext) {
+    if (!refreshToken) {
+      throw new UnauthorizedException("Refresh token missing");
+    }
+
     const payload = this.verifyRefreshToken(refreshToken);
 
     const tokenRecord = await this.prisma.refreshToken.findUnique({
@@ -225,7 +233,7 @@ export class AuthService {
         data: { revokedAt: new Date() },
       });
 
-      const tokens = await this.issueTokenPair(
+      const issuedTokens = await this.issueTokenPair(
         {
           id: tokenRecord.user.id,
           email: tokenRecord.user.email,
@@ -248,7 +256,7 @@ export class AuthService {
 
       return {
         user: this.toPublicUser(tokenRecord.user),
-        tokens,
+        issuedTokens,
       };
     });
 
@@ -361,7 +369,7 @@ export class AuthService {
   private async issueTokenPair(
     user: { id: string; email: string; role: Role },
     tx?: TxClient,
-  ): Promise<AuthTokens> {
+  ): Promise<IssuedAuthTokens> {
     const refreshTokenId = randomUUID();
 
     const accessTokenPayload: AccessTokenPayload = {
@@ -381,15 +389,18 @@ export class AuthService {
     };
 
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(accessTokenPayload, {
+      this.jwtService.signAsync(accessTokenPayload as unknown as Record<string, unknown>, {
         secret: this.accessSecret,
         expiresIn: this.accessTokenExpiresIn,
-      }),
-      this.jwtService.signAsync(refreshTokenPayload, {
+      } as never),
+      this.jwtService.signAsync(refreshTokenPayload as unknown as Record<string, unknown>, {
         secret: this.refreshSecret,
         expiresIn: this.refreshTokenExpiresIn,
-      }),
+      } as never),
     ]);
+
+    const accessTokenExpiresAt = this.decodeTokenExpiry(accessToken);
+    const refreshTokenExpiresAt = this.decodeTokenExpiry(refreshToken);
 
     const client = tx ?? this.prisma;
 
@@ -398,16 +409,15 @@ export class AuthService {
         id: refreshTokenId,
         userId: user.id,
         tokenHash: await bcrypt.hash(refreshToken, this.passwordHashRounds),
-        expiresAt: this.decodeTokenExpiry(refreshToken),
+        expiresAt: refreshTokenExpiresAt,
       },
     });
 
     return {
       accessToken,
       refreshToken,
-      tokenType: "Bearer",
-      accessTokenExpiresIn: this.accessTokenExpiresIn,
-      refreshTokenExpiresIn: this.refreshTokenExpiresIn,
+      accessTokenExpiresAt,
+      refreshTokenExpiresAt,
     };
   }
 
@@ -460,6 +470,37 @@ export class AuthService {
         revokedAt: new Date(),
       },
     });
+  }
+
+  private async recordFailedLogin(
+    email: string,
+    reason: string,
+    context?: AuthContext,
+    actorId?: string,
+  ) {
+    const maskedEmail = this.maskEmail(email);
+    this.logger.warn(`Failed login attempt for ${maskedEmail} (${reason})`);
+
+    await this.auditService.log({
+      actorId,
+      action: "AUTH_LOGIN_FAILED",
+      entityType: "Auth",
+      entityId: actorId,
+      ipAddress: context?.ipAddress,
+      userAgent: context?.userAgent,
+      payload: {
+        email: maskedEmail,
+        reason,
+      },
+    });
+  }
+
+  private maskEmail(email: string) {
+    const normalized = email.trim().toLowerCase();
+    const [local = "", domain = ""] = normalized.split("@");
+    if (!domain) return "***";
+    const visibleLocal = local.slice(0, 2);
+    return `${visibleLocal.padEnd(Math.max(local.length, 2), "*")}@${domain}`;
   }
 
   private toPublicUser(user: {

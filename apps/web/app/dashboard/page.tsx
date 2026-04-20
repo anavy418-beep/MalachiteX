@@ -26,6 +26,7 @@ import {
   type DashboardActivityItem,
 } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
+import { offerStatusLabel, tradeStatusLabel } from "@/lib/status";
 import { useAuth } from "@/hooks/use-auth";
 import { notificationService, type AppNotification } from "@/services/notification.service";
 import { offersService, type OfferRecord } from "@/services/offers.service";
@@ -33,6 +34,7 @@ import { tradesService, type TradeRecord } from "@/services/trades.service";
 import { walletService, type WalletSummary } from "@/services/wallet.service";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { LoadingState } from "@/components/ui/loading-state";
 
 const ACTIVE_TRADE_STATUSES = new Set([
   "OPEN",
@@ -47,17 +49,13 @@ const COMPLETED_TRADE_STATUSES = new Set(["COMPLETED", "RELEASED"]);
 
 function tradeStatusTone(status: string) {
   const normalized = status.toUpperCase();
-  if (normalized.includes("RELEASE") || normalized.includes("COMPLETE"))
-    return "border-emerald-700/50 bg-emerald-950/40 text-emerald-200";
+  if (normalized === "RELEASE_PENDING") return "border-lime-700/50 bg-lime-950/40 text-lime-200";
+  if (normalized.includes("RELEASE") || normalized.includes("COMPLETE")) return "border-emerald-700/50 bg-emerald-950/40 text-emerald-200";
   if (normalized.includes("PAID") || normalized.includes("SENT") || normalized.includes("PENDING"))
     return "border-lime-700/50 bg-lime-950/40 text-lime-200";
   if (normalized.includes("DISPUT")) return "border-amber-700/50 bg-amber-950/40 text-amber-200";
   if (normalized.includes("CANCEL")) return "border-red-700/50 bg-red-950/40 text-red-200";
   return "border-zinc-700/60 bg-zinc-900/60 text-slate-300";
-}
-
-function tradeStatusLabel(status: string) {
-  return status.replace(/_/g, " ");
 }
 
 function activityTone(type: DashboardActivityItem["type"]) {
@@ -102,6 +100,9 @@ export default function DashboardPage() {
   const [wallet, setWallet] = useState<WalletSummary>(DEMO_WALLET_SUMMARY);
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [offers, setOffers] = useState<OfferRecord[]>([]);
+  const [walletFallbackActive, setWalletFallbackActive] = useState(false);
+  const [tradesFallbackActive, setTradesFallbackActive] = useState(false);
+  const [offersFallbackActive, setOffersFallbackActive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isDemo, setIsDemo] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,8 +115,11 @@ export default function DashboardPage() {
         setWallet(DEMO_WALLET_SUMMARY);
         setTrades([]);
         setOffers([]);
+        setWalletFallbackActive(true);
+        setTradesFallbackActive(true);
+        setOffersFallbackActive(true);
         setIsDemo(true);
-        setError("Session token missing. Showing demo dashboard data.");
+        setError("You are viewing the public dashboard preview. Use Try Demo to load a signed-in workspace.");
         setLoading(false);
         return;
       }
@@ -132,6 +136,9 @@ export default function DashboardPage() {
       const walletValue = walletResult.status === "fulfilled" ? walletResult.value : DEMO_WALLET_SUMMARY;
       const tradesValue = tradesResult.status === "fulfilled" ? tradesResult.value : [];
       const offersValue = offersResult.status === "fulfilled" ? offersResult.value : [];
+      const walletFallback = walletResult.status !== "fulfilled";
+      const tradesFallback = tradesResult.status !== "fulfilled";
+      const offersFallback = offersResult.status !== "fulfilled";
 
       if (walletResult.status === "fulfilled") {
         setWallet(walletValue);
@@ -157,6 +164,10 @@ export default function DashboardPage() {
         issues.push("offers");
       }
 
+      setWalletFallbackActive(walletFallback);
+      setTradesFallbackActive(tradesFallback);
+      setOffersFallbackActive(offersFallback);
+
       if (user?.id) {
         const ownOfferSource = offersValue.filter((offer) => offer.userId === user.id);
         const notificationsPayload = await notificationService.list({
@@ -165,6 +176,7 @@ export default function DashboardPage() {
           wallet: walletValue,
           trades: tradesValue,
           offers: ownOfferSource,
+          scope: "P2P",
         });
         setNotifications(notificationsPayload);
       } else {
@@ -172,7 +184,11 @@ export default function DashboardPage() {
       }
 
       setIsDemo(demoFallback);
-      setError(issues.length > 0 ? `Live ${issues.join(", ")} data unavailable. Using demo fallback where needed.` : null);
+      setError(
+        issues.length > 0
+          ? `Some live ${issues.join(", ")} data is unavailable, so demo-safe fallback data is shown.`
+          : null,
+      );
       setLoading(false);
     })();
   }, [user?.id]);
@@ -184,9 +200,20 @@ export default function DashboardPage() {
   const activeTradesCount = trades.filter((trade) => ACTIVE_TRADE_STATUSES.has(trade.status.toUpperCase())).length;
   const completedTradesCount = trades.filter((trade) => COMPLETED_TRADE_STATUSES.has(trade.status.toUpperCase())).length;
   const openOffersCount = ownOffers.filter((offer) => (offer.status ?? "ACTIVE").toUpperCase() === "ACTIVE").length;
+  const activeTradesDisplayCount =
+    activeTradesCount === 0 && tradesFallbackActive ? DEMO_DASHBOARD_TRADES.length : activeTradesCount;
+  const completedTradesDisplayCount =
+    completedTradesCount === 0 && tradesFallbackActive
+      ? DEMO_DASHBOARD_TRADES.filter((trade) => COMPLETED_TRADE_STATUSES.has(trade.status.toUpperCase())).length
+      : completedTradesCount;
+  const openOffersDisplayCount =
+    openOffersCount === 0 && offersFallbackActive ? DEMO_DASHBOARD_OFFERS.length : openOffersCount;
+  const useDemoActivityFallback = walletFallbackActive || tradesFallbackActive || offersFallbackActive;
 
   const tradeRows: DashboardTradeRow[] = useMemo(() => {
-    if (trades.length === 0) return DEMO_DASHBOARD_TRADES;
+    if (trades.length === 0) {
+      return tradesFallbackActive ? DEMO_DASHBOARD_TRADES : [];
+    }
 
     return trades
       .filter(
@@ -209,10 +236,12 @@ export default function DashboardPage() {
           status: trade.status,
         };
       });
-  }, [trades, user?.id]);
+  }, [trades, user?.id, tradesFallbackActive]);
 
   const offerRows: DashboardOfferRow[] = useMemo(() => {
-    if (ownOffers.length === 0) return DEMO_DASHBOARD_OFFERS;
+    if (ownOffers.length === 0) {
+      return offersFallbackActive ? DEMO_DASHBOARD_OFFERS : [];
+    }
 
     return ownOffers.slice(0, 4).map((offer) => ({
       id: offer.id,
@@ -225,7 +254,7 @@ export default function DashboardPage() {
       maxAmountMinor: offer.maxAmountMinor,
       status: (offer.status ?? "ACTIVE").toUpperCase(),
     }));
-  }, [ownOffers]);
+  }, [ownOffers, offersFallbackActive]);
 
   const activity: DashboardActivityItem[] = useMemo(() => {
     const liveActivity: DashboardActivityItem[] = [];
@@ -275,26 +304,29 @@ export default function DashboardPage() {
       });
     });
 
-    if (liveActivity.length === 0) return DEMO_DASHBOARD_ACTIVITY;
+    if (liveActivity.length === 0) {
+      return useDemoActivityFallback ? DEMO_DASHBOARD_ACTIVITY : [];
+    }
     return liveActivity
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, 6);
-  }, [wallet.ledger, trades, ownOffers]);
+  }, [wallet.ledger, trades, ownOffers, useDemoActivityFallback]);
 
   const unreadCount = notifications.filter((item) => !item.read).length;
 
   const assetBalances = useMemo(
-    () => [
-      {
+    () => {
+      const primaryAsset = {
         asset: wallet.currency,
         network: "Primary Wallet",
         availableMinor: available.toString(),
         lockedMinor: locked.toString(),
         changePct24h: 0,
-      },
-      ...DEMO_DASHBOARD_ASSET_BALANCES,
-    ],
-    [wallet.currency, available, locked],
+      };
+
+      return walletFallbackActive ? [primaryAsset, ...DEMO_DASHBOARD_ASSET_BALANCES] : [primaryAsset];
+    },
+    [wallet.currency, available, locked, walletFallbackActive],
   );
 
   async function markNotificationRead(id: string) {
@@ -313,7 +345,7 @@ export default function DashboardPage() {
   }
 
   if (isBootstrapping) {
-    return <p className="text-sm text-slate-400">Loading dashboard...</p>;
+    return <LoadingState label="Preparing your dashboard" />;
   }
 
   if (!isAuthenticated) {
@@ -331,9 +363,9 @@ export default function DashboardPage() {
   return (
     <section className="space-y-6">
       <header className="space-y-2">
-        <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Malachitex Console</p>
+        <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">MalachiteX Console</p>
         <h1 className="text-3xl font-semibold text-white">Dashboard</h1>
-        <p className="text-sm text-slate-400">Portfolio, wallet operations, live trades, and marketplace signals.</p>
+        <p className="text-sm text-slate-400">Portfolio, wallet operations, P2P trade status, and marketplace signals.</p>
       </header>
 
       {error ? (
@@ -429,7 +461,7 @@ export default function DashboardPage() {
                 <CardDescription>Active Trades</CardDescription>
               </CardHeader>
               <CardContent>
-                <p className="text-xl font-semibold text-white">{activeTradesCount || DEMO_DASHBOARD_TRADES.length}</p>
+                <p className="text-xl font-semibold text-white">{activeTradesDisplayCount}</p>
               </CardContent>
             </Card>
             <Card>
@@ -437,7 +469,7 @@ export default function DashboardPage() {
                 <CardDescription>Completed Trades</CardDescription>
               </CardHeader>
               <CardContent>
-                <p className="text-xl font-semibold text-white">{completedTradesCount || 1}</p>
+                <p className="text-xl font-semibold text-white">{completedTradesDisplayCount}</p>
               </CardContent>
             </Card>
             <Card>
@@ -445,7 +477,7 @@ export default function DashboardPage() {
                 <CardDescription>Open Offers</CardDescription>
               </CardHeader>
               <CardContent>
-                <p className="text-xl font-semibold text-white">{openOffersCount || DEMO_DASHBOARD_OFFERS.length}</p>
+                <p className="text-xl font-semibold text-white">{openOffersDisplayCount}</p>
               </CardContent>
             </Card>
           </div>
@@ -583,25 +615,31 @@ export default function DashboardPage() {
                 <CardDescription>Quick preview of your trade workspace</CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
-                {tradeRows.map((trade) => (
-                  <div key={trade.id} className="grid gap-2 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 md:grid-cols-[1.3fr_1fr_auto] md:items-center">
-                    <div>
-                      <p className="text-sm font-medium text-slate-100">{trade.merchantName}</p>
-                      <p className="text-xs text-slate-500">
-                        {trade.side} {trade.asset} · {trade.paymentMethod}
-                      </p>
-                      <p className="text-xs text-slate-400">{formatMinorUnits(trade.amountMinor, trade.asset)}</p>
-                    </div>
-                    <span className={`inline-flex w-fit rounded-full border px-2 py-1 text-xs ${tradeStatusTone(trade.status)}`}>
-                      {tradeStatusLabel(trade.status)}
-                    </span>
-                    <Link href={`/trades/${trade.id}`}>
-                      <Button size="sm" variant="outline">
-                        Open
-                      </Button>
-                    </Link>
+                {tradeRows.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-zinc-700 px-3 py-4 text-sm text-slate-500">
+                    No active P2P trades yet.
                   </div>
-                ))}
+                ) : (
+                  tradeRows.map((trade) => (
+                    <div key={trade.id} className="grid gap-2 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 md:grid-cols-[1.3fr_1fr_auto] md:items-center">
+                      <div>
+                        <p className="text-sm font-medium text-slate-100">{trade.merchantName}</p>
+                        <p className="text-xs text-slate-500">
+                          {trade.side} {trade.asset} · {trade.paymentMethod}
+                        </p>
+                        <p className="text-xs text-slate-400">{formatMinorUnits(trade.amountMinor, trade.asset)}</p>
+                      </div>
+                      <span className={`inline-flex w-fit rounded-full border px-2 py-1 text-xs ${tradeStatusTone(trade.status)}`}>
+                        {tradeStatusLabel(trade.status)}
+                      </span>
+                      <Link href={`/trades/${trade.id}`}>
+                        <Button size="sm" variant="outline">
+                          Open
+                        </Button>
+                      </Link>
+                    </div>
+                  ))
+                )}
               </CardContent>
             </Card>
 
@@ -609,7 +647,9 @@ export default function DashboardPage() {
               <CardHeader>
                 <CardTitle className="text-lg">Open Offers</CardTitle>
                 <CardDescription>
-                  {openOffersCount > 0 ? `${openOffersCount} offer(s) currently active` : "Manage your market offers"}
+                  {openOffersDisplayCount > 0
+                    ? `${openOffersDisplayCount} offer(s) currently active`
+                    : "Manage your market offers"}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
@@ -633,7 +673,7 @@ export default function DashboardPage() {
                         </p>
                       </div>
                       <span className="inline-flex w-fit rounded-full border border-emerald-700/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200">
-                        {offer.status}
+                        {offerStatusLabel(offer.status)}
                       </span>
                       <Link href="/offers">
                         <Button size="sm" variant="outline">
@@ -663,3 +703,4 @@ export default function DashboardPage() {
     </section>
   );
 }
+

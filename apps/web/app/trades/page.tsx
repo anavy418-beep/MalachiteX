@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ListChecks } from "lucide-react";
 import { tokenStore } from "@/lib/api";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
+import { normalizeTradeStatus, tradeStatusLabel } from "@/lib/status";
 import { tradesService, type TradeRecord } from "@/services/trades.service";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,18 +26,26 @@ const DEMO_TRADES: TradeRecord[] = [
 ];
 
 function statusTone(status: string) {
-  const normalized = status.toUpperCase();
-  if (normalized.includes("COMPLETE") || normalized.includes("RELEASE")) return "text-emerald-300";
-  if (normalized.includes("DISPUT")) return "text-amber-300";
-  if (normalized.includes("CANCEL")) return "text-red-300";
-  if (normalized.includes("SENT") || normalized.includes("PENDING") || normalized.includes("OPEN")) {
+  const normalized = normalizeTradeStatus(status);
+  if (normalized === "RELEASE_PENDING") return "text-lime-300";
+  if (normalized === "COMPLETED") return "text-emerald-300";
+  if (normalized === "DISPUTED") return "text-amber-300";
+  if (normalized === "CANCELLED") return "text-red-300";
+  if (normalized === "PAYMENT_SENT" || normalized === "PAYMENT_PENDING") {
     return "text-lime-300";
   }
   return "text-slate-200";
 }
 
-function statusLabel(status: string) {
-  return status.replace(/_/g, " ");
+function statusHint(status: string) {
+  const normalized = normalizeTradeStatus(status);
+  if (normalized === "PAYMENT_PENDING") return "Waiting for buyer payment proof.";
+  if (normalized === "PAYMENT_SENT") return "Buyer submitted proof. Seller verification in progress.";
+  if (normalized === "RELEASE_PENDING") return "Payment confirmed. Escrow release is pending.";
+  if (normalized === "COMPLETED") return "Escrow released and trade settled.";
+  if (normalized === "CANCELLED") return "Trade canceled. Escrow was refunded.";
+  if (normalized === "DISPUTED") return "Dispute opened. Awaiting review and resolution.";
+  return "Status update available in trade workspace.";
 }
 
 export default function TradesPage() {
@@ -52,25 +61,20 @@ export default function TradesPage() {
       if (!token) {
         setTrades(DEMO_TRADES);
         setIsDemo(true);
-        setError("Session token missing. Showing demo trade list.");
+        setError("Showing a sample trade list. Sign in to view your live P2P trade history.");
         setLoading(false);
         return;
       }
 
       try {
         const payload = await tradesService.listMine(token);
-
-        if (payload.length === 0) {
-          setTrades(DEMO_TRADES);
-          setIsDemo(true);
-        } else {
-          setTrades(payload);
-          setIsDemo(false);
-        }
+        setTrades(payload);
+        setIsDemo(false);
+        setError(null);
       } catch (err) {
         setTrades(DEMO_TRADES);
         setIsDemo(true);
-        setError((err as Error).message);
+        setError(`Live P2P trades unavailable. Showing sample trades. ${(err as Error).message}`);
       } finally {
         setLoading(false);
       }
@@ -106,8 +110,9 @@ export default function TradesPage() {
                   <p className="text-sm text-slate-400">Trade ID</p>
                   <p className="font-mono text-xs text-slate-200">{trade.id}</p>
                 </div>
-                <p className={`text-sm font-medium ${statusTone(trade.status)}`}>{statusLabel(trade.status)}</p>
+                <p className={`text-sm font-medium ${statusTone(trade.status)}`}>{tradeStatusLabel(trade.status)}</p>
               </div>
+              <p className="mt-2 text-xs text-slate-500">{statusHint(trade.status)}</p>
 
               <div className="mt-3 grid gap-2 text-sm text-slate-300 sm:grid-cols-3">
                 <p>Amount: {formatMinorUnits(trade.amountMinor, "USDT")}</p>
@@ -139,7 +144,7 @@ export default function TradesPage() {
         </CardContent>
       </Card>
 
-      {isDemo ? <p className="text-xs text-amber-300/80">Showing demo trades for walkthrough.</p> : null}
+      {isDemo ? <p className="text-xs text-amber-300/80">Showing sample P2P trades for walkthrough.</p> : null}
     </section>
   );
 }

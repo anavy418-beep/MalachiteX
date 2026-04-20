@@ -1,9 +1,10 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
-import { ThrottlerModule } from "@nestjs/throttler";
+import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { APP_GUARD } from "@nestjs/core";
 import { APP_INTERCEPTOR } from "@nestjs/core";
 import { resolve } from "node:path";
+import { validateEnv } from "./config/env.validation";
 import { PrismaModule } from "./common/prisma/prisma.module";
 import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
 import { RolesGuard } from "./common/guards/roles.guard";
@@ -19,6 +20,8 @@ import { AuditModule } from "./modules/audit/audit.module";
 import { AdminModule } from "./modules/admin/admin.module";
 import { NotificationsModule } from "./modules/notifications/notifications.module";
 import { FilesModule } from "./modules/files/files.module";
+import { MarketsModule } from "./modules/markets/markets.module";
+import { PaperTradingModule } from "./modules/paper-trading/paper-trading.module";
 import { RedisModule } from "./modules/redis/redis.module";
 
 @Module({
@@ -29,6 +32,7 @@ import { RedisModule } from "./modules/redis/redis.module";
         resolve(process.cwd(), ".env"),
         resolve(process.cwd(), "../../.env"),
       ],
+      validate: validateEnv,
     }),
     ThrottlerModule.forRoot([
       {
@@ -49,8 +53,14 @@ import { RedisModule } from "./modules/redis/redis.module";
     AdminModule,
     NotificationsModule,
     FilesModule,
+    MarketsModule,
+    PaperTradingModule,
   ],
   providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,

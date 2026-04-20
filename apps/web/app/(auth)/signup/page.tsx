@@ -99,7 +99,7 @@ export default function SignupPage() {
 
   return (
     <AuthShell
-      title="Create your Malachitex account"
+      title="Create your MalachiteX account"
       subtitle="Start with secure custody, wallet visibility, and P2P-ready workflows."
       footer={
         <p>
@@ -177,3 +177,4 @@ export default function SignupPage() {
     </AuthShell>
   );
 }
+

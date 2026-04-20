@@ -42,6 +42,11 @@ export default function CreateOfferPage() {
   const [minAmountMinor, setMinAmountMinor] = useState("10000");
   const [maxAmountMinor, setMaxAmountMinor] = useState("300000");
   const [paymentMethod, setPaymentMethod] = useState("UPI");
+  const [paymentReceiverName, setPaymentReceiverName] = useState(user?.username ?? "");
+  const [paymentUpiId, setPaymentUpiId] = useState("merchant@upi");
+  const [paymentBankName, setPaymentBankName] = useState("");
+  const [paymentAccountNumber, setPaymentAccountNumber] = useState("");
+  const [paymentIfsc, setPaymentIfsc] = useState("");
   const [terms, setTerms] = useState("Release after verified incoming payment.");
 
   const calculatedPriceMinor = useMemo(() => {
@@ -95,6 +100,11 @@ export default function CreateOfferPage() {
           minAmountMinor,
           maxAmountMinor,
           paymentMethod,
+          paymentReceiverName,
+          paymentUpiId,
+          paymentBankName,
+          paymentAccountNumber,
+          paymentIfsc,
           terms,
         },
         { userId: user?.id, merchantName: user?.username },
@@ -223,6 +233,37 @@ export default function CreateOfferPage() {
                     <option value="Paytm">Paytm</option>
                   </select>
                 </label>
+                <label className="grid gap-1 text-sm text-slate-300">
+                  Receiver name
+                  <Input value={paymentReceiverName} onChange={(event) => setPaymentReceiverName(event.target.value)} />
+                </label>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="grid gap-1 text-sm text-slate-300">
+                  UPI ID
+                  <Input value={paymentUpiId} onChange={(event) => setPaymentUpiId(event.target.value)} placeholder="name@bank" />
+                </label>
+                <label className="grid gap-1 text-sm text-slate-300">
+                  Bank name
+                  <Input value={paymentBankName} onChange={(event) => setPaymentBankName(event.target.value)} placeholder="Optional" />
+                </label>
+                <label className="grid gap-1 text-sm text-slate-300">
+                  Account number
+                  <Input
+                    value={paymentAccountNumber}
+                    onChange={(event) => setPaymentAccountNumber(event.target.value.replace(/[^A-Za-z0-9\- ]/g, ""))}
+                    placeholder="Optional"
+                  />
+                </label>
+                <label className="grid gap-1 text-sm text-slate-300">
+                  IFSC
+                  <Input
+                    value={paymentIfsc}
+                    onChange={(event) => setPaymentIfsc(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
+                    placeholder="Optional"
+                  />
+                </label>
               </div>
 
               <label className="grid gap-1 text-sm text-slate-300">
@@ -277,6 +318,9 @@ export default function CreateOfferPage() {
             <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
               <p className="text-xs uppercase tracking-wide text-slate-500">Payment Method</p>
               <p className="text-slate-200">{paymentMethod}</p>
+              <p className="mt-1 text-xs text-slate-500">
+                {paymentReceiverName || "Receiver"} {paymentUpiId ? `| ${paymentUpiId}` : ""}
+              </p>
             </div>
             <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
               <p className="text-xs uppercase tracking-wide text-slate-500">Terms</p>

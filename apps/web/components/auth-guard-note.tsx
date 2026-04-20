@@ -1,12 +1,14 @@
 "use client";
 
-import { tokenStore } from "@/lib/api";
+import { useAuth } from "@/hooks/use-auth";
 
 export function AuthGuardNote() {
-  if (!tokenStore.accessToken) {
+  const { isAuthenticated } = useAuth();
+
+  if (!isAuthenticated) {
     return (
-      <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-        You are browsing as guest. Login to execute authenticated actions.
+      <div className="rounded-xl border border-amber-800/40 bg-amber-950/20 p-3 text-sm text-amber-100">
+        You are browsing the public demo. Sign in or use Try Demo to run authenticated actions.
       </div>
     );
   }

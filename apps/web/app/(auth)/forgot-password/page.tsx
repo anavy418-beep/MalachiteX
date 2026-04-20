@@ -56,7 +56,7 @@ export default function ForgotPasswordPage() {
   return (
     <AuthShell
       title="Recover account access"
-      subtitle="Request a password reset token to recover your Malachitex account."
+      subtitle="Request a password reset token to recover your MalachiteX account."
       footer={
         <p>
           Remembered your password?{" "}
@@ -96,3 +96,4 @@ export default function ForgotPasswordPage() {
     </AuthShell>
   );
 }
+

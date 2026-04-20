@@ -77,6 +77,27 @@ enum DepositStatus {
   FAILED
 }
 
+enum PaperOrderSide {
+  BUY
+  SELL
+}
+
+enum PaperPositionType {
+  LONG
+  SHORT
+}
+
+enum PaperOrderType {
+  MARKET
+  LIMIT
+}
+
+enum PaperOrderStatus {
+  OPEN
+  FILLED
+  CANCELLED
+}
+
 model User {
   id                  String               @id @default(uuid())
   email               String               @unique
@@ -102,6 +123,7 @@ model User {
   deposits            Deposit[]
   ledgerEntries       LedgerEntry[]
   tradeEscrowEvents   TradeEscrowEvent[]   @relation("EscrowEventActor")
+  paperTradingAccount PaperTradingAccount?
 }
 
 model Wallet {
@@ -153,6 +175,7 @@ model Offer {
   minAmountMinor BigInt
   maxAmountMinor BigInt
   paymentMethod  String
+  paymentDetails Json?
   terms          String?
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
@@ -173,9 +196,12 @@ model Trade {
   fiatPriceMinor   BigInt
   fiatTotalMinor   BigInt
   escrowHeldMinor  BigInt
+  paymentInstructions Json?
+  paymentProof        Json?
   status           TradeStatus       @default(OPEN)
   openedAt         DateTime          @default(now())
   paidAt           DateTime?
+  sellerPaymentConfirmedAt DateTime?
   releasedAt       DateTime?
   completedAt      DateTime?
   canceledAt       DateTime?
@@ -320,4 +346,87 @@ model TradeEscrowEvent {
   createdAt   DateTime @default(now())
 
   @@index([tradeId, createdAt])
+}
+
+model PaperTradingAccount {
+  id               String             @id @default(uuid())
+  userId           String             @unique
+  user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currency         String             @default("USDT")
+  balanceMinor     BigInt             @default(0)
+  realizedPnlMinor BigInt             @default(0)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  positions        PaperPosition[]
+  orders           PaperOrder[]
+  tradeHistory     PaperTradeHistory[]
+}
+
+model PaperPosition {
+  id                     String              @id @default(uuid())
+  accountId              String
+  account                PaperTradingAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  symbol                 String
+  type                   PaperPositionType   @default(LONG)
+  leverage               Int                 @default(1)
+  baseAsset              String
+  quoteAsset             String
+  quantityAtomic         BigInt
+  averageEntryPriceMinor BigInt
+  costBasisMinor         BigInt
+  marginMinor            BigInt              @default(0)
+  liquidationPriceMinor  BigInt?
+  stopLossPriceMinor     BigInt?
+  takeProfitPriceMinor   BigInt?
+  openedAt               DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  @@unique([accountId, symbol])
+}
+
+model PaperOrder {
+  id                  String              @id @default(uuid())
+  accountId           String
+  account             PaperTradingAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  symbol              String
+  positionType        PaperPositionType   @default(LONG)
+  side                PaperOrderSide
+  leverage            Int                 @default(1)
+  type                PaperOrderType      @default(MARKET)
+  status              PaperOrderStatus    @default(FILLED)
+  quantityAtomic      BigInt
+  limitPriceMinor     BigInt?
+  executedPriceMinor  BigInt?
+  reservedMarginMinor BigInt              @default(0)
+  stopLossPriceMinor  BigInt?
+  takeProfitPriceMinor BigInt?
+  notionalMinor       BigInt              @default(0)
+  realizedPnlMinor    BigInt              @default(0)
+  triggerReason       String?
+  filledAt            DateTime?
+  createdAt           DateTime            @default(now())
+  tradeHistory        PaperTradeHistory[]
+
+  @@index([accountId, createdAt])
+}
+
+model PaperTradeHistory {
+  id               String              @id @default(uuid())
+  accountId        String
+  account          PaperTradingAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  orderId          String
+  order            PaperOrder          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  symbol           String
+  positionType     PaperPositionType   @default(LONG)
+  leverage         Int                 @default(1)
+  side             PaperOrderSide
+  quantityAtomic   BigInt
+  entryPriceMinor  BigInt
+  exitPriceMinor   BigInt
+  realizedPnlMinor BigInt
+  closeReason      String?
+  openedAt         DateTime
+  closedAt         DateTime            @default(now())
+
+  @@index([accountId, closedAt])
 }

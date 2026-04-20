@@ -94,7 +94,7 @@ export default function WalletHistoryPage() {
       if (!token) {
         setCurrency(DEMO_WALLET_SUMMARY.currency);
         setHistory(buildHistory(DEMO_WALLET_SUMMARY.ledger, DEMO_DEPOSITS, DEMO_WITHDRAWALS));
-        setError("Session token missing. Showing demo history.");
+        setError("Showing demo wallet history. Use Try Demo to load signed-in activity.");
         setLoading(false);
         return;
       }

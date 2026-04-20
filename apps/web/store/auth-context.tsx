@@ -31,9 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isBootstrapping, setIsBootstrapping] = useState(true);
 
   const refreshUser = useCallback(async (): Promise<AuthUser | null> => {
-    const hasAnyToken = Boolean(tokenStore.accessToken || tokenStore.refreshToken);
-
-    if (!hasAnyToken) {
+    if (!tokenStore.hasSessionMarker()) {
       setUser(null);
       return null;
     }

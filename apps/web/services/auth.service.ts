@@ -25,14 +25,8 @@ export interface ResetPasswordInput {
   password: string;
 }
 
-interface AuthTokens {
-  accessToken: string;
-  refreshToken: string;
-}
-
 interface AuthResult {
   user: AuthUser;
-  tokens: AuthTokens;
 }
 
 function toUsername(fullName: string): string {
@@ -50,19 +44,14 @@ function toUsername(fullName: string): string {
 
 export const authService = {
   async login(input: LoginInput): Promise<AuthResult> {
-    const result = await apiRequest<AuthResult>("/auth/login", {
+    return apiRequest<AuthResult>("/auth/login", {
       method: "POST",
       body: JSON.stringify(input),
     });
-
-    tokenStore.accessToken = result.tokens.accessToken;
-    tokenStore.refreshToken = result.tokens.refreshToken;
-
-    return result;
   },
 
   async signup(input: SignupInput): Promise<AuthResult> {
-    const result = await apiRequest<AuthResult>("/auth/signup", {
+    return apiRequest<AuthResult>("/auth/signup", {
       method: "POST",
       body: JSON.stringify({
         email: input.email,
@@ -70,20 +59,12 @@ export const authService = {
         password: input.password,
       }),
     });
-
-    tokenStore.accessToken = result.tokens.accessToken;
-    tokenStore.refreshToken = result.tokens.refreshToken;
-
-    return result;
   },
 
   async logout(): Promise<void> {
-    const refreshToken = tokenStore.refreshToken;
-
     try {
       await apiRequest("/auth/logout", {
         method: "POST",
-        body: JSON.stringify({ refreshToken }),
       });
     } finally {
       tokenStore.clear();

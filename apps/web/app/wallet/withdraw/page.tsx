@@ -44,7 +44,7 @@ export default function WalletWithdrawPage() {
     if (!token) {
       setRecords(DEMO_WITHDRAWALS);
       setIsDemo(true);
-      setError("Session token missing. Showing demo withdrawal data.");
+      setError("Showing demo withdrawal records. Use Try Demo to test an authenticated request.");
       setLoading(false);
       return;
     }

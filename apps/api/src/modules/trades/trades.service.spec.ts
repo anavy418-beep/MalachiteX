@@ -39,7 +39,7 @@ describe("TradesService", () => {
     });
 
     await expect(
-      service.create("user-1", { offerId: "offer-1", amountMinor: 100 }),
+      service.create("user-1", { offerId: "offer-1", amountMinor: "100" }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 

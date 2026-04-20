@@ -4,8 +4,8 @@ import { AppProviders } from "@/components/app-providers";
 import { Navbar } from "@/components/navbar";
 
 export const metadata: Metadata = {
-  title: "Malachitex",
-  description: "Malachitex - premium crypto wallet and P2P trading MVP",
+  title: "MalachiteX",
+  description: "MalachiteX - premium crypto wallet and P2P trading MVP",
 };
 
 export default function RootLayout({
@@ -26,3 +26,4 @@ export default function RootLayout({
     </html>
   );
 }
+
