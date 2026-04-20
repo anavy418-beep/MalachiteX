@@ -48,6 +48,7 @@ const MARKET_SORT_OPTIONS: Array<{ value: MarketSortOption; label: string }> = [
   { value: "price_high", label: "Price (High)" },
   { value: "price_low", label: "Price (Low)" },
 ];
+const FALLBACK_COIN_ICON = "/fallback-coin.png";
 
 function formatPrice(price: string) {
   const value = Number.parseFloat(price);
@@ -531,6 +532,10 @@ function MarketsPageContent() {
                           className="h-8 w-8 rounded-full bg-zinc-900/70 p-0.5 object-contain"
                           loading="lazy"
                           decoding="async"
+                          onError={(event) => {
+                            event.currentTarget.onerror = null;
+                            event.currentTarget.src = FALLBACK_COIN_ICON;
+                          }}
                         />
                         <div>
                           <p className="font-semibold">{coin.name}</p>
@@ -575,6 +580,10 @@ function MarketsPageContent() {
                       className="h-8 w-8 rounded-full bg-zinc-900/70 p-0.5 object-contain"
                       loading="lazy"
                       decoding="async"
+                      onError={(event) => {
+                        event.currentTarget.onerror = null;
+                        event.currentTarget.src = FALLBACK_COIN_ICON;
+                      }}
                     />
                     <div>
                       <p className="text-sm font-semibold text-slate-100">{coin.name}</p>
