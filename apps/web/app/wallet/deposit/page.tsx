@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { ArrowDownToLine, CheckCircle2, Clock3, QrCode } from "lucide-react";
 import { tokenStore } from "@/lib/api";
+import { friendlyErrorMessage } from "@/lib/errors";
 import { DEMO_DEPOSITS, DEMO_WALLET_SUMMARY } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import {
@@ -78,7 +79,7 @@ export default function WalletDepositPage() {
       setRecords(DEMO_DEPOSITS);
       setWallet(DEMO_WALLET_SUMMARY);
       setIsDemo(true);
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Live deposit history is temporarily unavailable."));
     } finally {
       setLoading(false);
     }
@@ -110,7 +111,7 @@ export default function WalletDepositPage() {
       (event.currentTarget as HTMLFormElement).reset();
       await loadRecords();
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to submit this deposit confirmation."));
     } finally {
       setSubmitting(false);
     }

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
+import { friendlyErrorMessage } from "@/lib/errors";
 
 const resetSchema = z
   .object({
@@ -93,7 +94,7 @@ export default function ResetPasswordPage() {
         router.replace("/login");
       }, 1400);
     } catch (error) {
-      setFormError((error as Error).message || "Unable to reset password");
+      setFormError(friendlyErrorMessage(error, "Unable to reset your password right now."));
     } finally {
       setLoading(false);
     }

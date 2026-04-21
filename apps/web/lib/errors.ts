@@ -3,6 +3,9 @@ export function friendlyErrorMessage(error: unknown, fallback = "Something went 
   const message = rawMessage.trim();
 
   if (!message) return fallback;
+  if (/cannot get\s+\/api|market endpoint not found|upstream .* failed|request failed\s*\(/i.test(message)) {
+    return "Live service is temporarily unavailable. Please try again shortly.";
+  }
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
     return "The demo API is not reachable right now. You can still browse the public preview screens.";
   }

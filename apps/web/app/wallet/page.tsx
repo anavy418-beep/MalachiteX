@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowDownToLine, ArrowUpFromLine, Clock3, History, QrCode } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { tokenStore } from "@/lib/api";
+import { friendlyErrorMessage } from "@/lib/errors";
 import { DEMO_WALLET_SUMMARY } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import {
@@ -74,7 +75,7 @@ export default function WalletPage() {
         if (!active) return;
         setWallet(DEMO_WALLET_SUMMARY);
         setIsDemo(true);
-        setError((err as Error).message);
+        setError(friendlyErrorMessage(err, "Live wallet data is temporarily unavailable."));
       } finally {
         if (active) {
           setLoading(false);

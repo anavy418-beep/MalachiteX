@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { tokenStore } from "@/lib/api";
+import { friendlyErrorMessage } from "@/lib/errors";
 import {
   buildMarketSelectionPath,
   DEFAULT_SUPPORTED_MARKET_SYMBOLS,
@@ -656,8 +657,9 @@ function DemoTradingPageContent() {
       setAccountMissing(false);
       setError(null);
     } catch (err) {
-      const message = (err as Error).message;
-      const normalized = message.toLowerCase();
+      const rawMessage = err instanceof Error ? err.message : String(err ?? "");
+      const normalized = rawMessage.toLowerCase();
+      const safeMessage = friendlyErrorMessage(err, "Unable to load your demo account right now.");
       const missingAccount = normalized.includes("not found") || normalized.includes("404");
 
       if (missingAccount && options?.autoCreateIfMissing) {
@@ -674,7 +676,7 @@ function DemoTradingPageContent() {
         } catch (createError) {
           setAccountMissing(true);
           setPaperAccount((current) => current ?? buildFallbackPaperAccountSummary());
-          setError((createError as Error).message);
+          setError(friendlyErrorMessage(createError, "Unable to create your demo account right now."));
           return;
         }
       }
@@ -684,7 +686,7 @@ function DemoTradingPageContent() {
         setPaperAccount((current) => current ?? buildFallbackPaperAccountSummary());
         setError(null);
       } else {
-        setError(message);
+        setError(safeMessage);
         setPaperAccount((current) => current ?? buildFallbackPaperAccountSummary());
       }
     } finally {
@@ -916,7 +918,7 @@ function DemoTradingPageContent() {
       } catch (error) {
         if (!active) return;
         console.error("Failed to fetch Binance depth snapshot:", error);
-        setDepthFeedError((error as Error).message);
+        setDepthFeedError(friendlyErrorMessage(error, "Live depth feed is temporarily unavailable."));
       }
 
       if (active) {
@@ -1079,7 +1081,7 @@ function DemoTradingPageContent() {
       setPaperAccount(summary);
       setAccountMissing(false);
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to initialize your demo account right now."));
     } finally {
       setIsCreatingAccount(false);
     }
@@ -1109,7 +1111,7 @@ function DemoTradingPageContent() {
         setLimitPrice("");
       }
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to place this demo order right now."));
     } finally {
       setIsSubmitting(false);
     }
@@ -1126,7 +1128,7 @@ function DemoTradingPageContent() {
       const summary = await paperTradingService.closePosition(token, symbol);
       setPaperAccount(summary);
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to close this demo position right now."));
     } finally {
       setIsSubmitting(false);
     }
@@ -1143,7 +1145,7 @@ function DemoTradingPageContent() {
       const summary = await paperTradingService.cancelOrder(token, orderId);
       setPaperAccount(summary);
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to cancel this demo order right now."));
     } finally {
       setIsSubmitting(false);
     }
@@ -1171,7 +1173,7 @@ function DemoTradingPageContent() {
       });
       setPaperAccount(summary);
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to update stop loss/take profit right now."));
     } finally {
       setIsSubmitting(false);
     }
@@ -1240,7 +1242,7 @@ function DemoTradingPageContent() {
   }
 
   if (isPageLoading && !paperAccount) {
-    return <LoadingState label="Loading demo trading desk" />;
+    return <LoadingState label="Preparing demo trading workspace" />;
   }
 
   if (!isAuthenticated && !isBootstrapping) {
@@ -1779,7 +1781,7 @@ function DemoTradingPageContent() {
 
 export default function DemoTradingPage() {
   return (
-    <Suspense fallback={<LoadingState label="Loading demo trading desk" />}>
+    <Suspense fallback={<LoadingState label="Preparing demo trading workspace" />}>
       <DemoTradingPageContent />
     </Suspense>
   );

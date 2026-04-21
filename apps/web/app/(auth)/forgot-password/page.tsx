@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
+import { friendlyErrorMessage } from "@/lib/errors";
 
 const forgotSchema = z.object({
   email: z.string().trim().email("Enter a valid email"),
@@ -47,7 +48,7 @@ export default function ForgotPasswordPage() {
       setSuccessMessage("If your account exists, reset instructions have been generated.");
       setDevToken(result.resetToken);
     } catch (error) {
-      setFormError((error as Error).message || "Unable to process request");
+      setFormError(friendlyErrorMessage(error, "Unable to process your reset request right now."));
     } finally {
       setLoading(false);
     }

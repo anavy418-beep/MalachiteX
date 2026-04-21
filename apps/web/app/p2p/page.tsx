@@ -29,6 +29,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { offersService, type OfferRecord } from "@/services/offers.service";
 import { tradesService } from "@/services/trades.service";
 import { tokenStore } from "@/lib/api";
+import { friendlyErrorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -174,7 +175,7 @@ export default function P2PPage() {
     } catch (err) {
       setOffers(DEMO_P2P_OFFERS);
       setIsDemo(true);
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Live P2P offers are temporarily unavailable. Showing demo offers."));
     } finally {
       setLoading(false);
     }
@@ -325,7 +326,7 @@ export default function P2PPage() {
       setSelectedOffer(null);
       router.push(`/trades/${trade.id}`);
     } catch (err) {
-      setTradeError((err as Error).message);
+      setTradeError(friendlyErrorMessage(err, "Unable to start this trade right now."));
     } finally {
       setSubmittingOfferId(null);
     }

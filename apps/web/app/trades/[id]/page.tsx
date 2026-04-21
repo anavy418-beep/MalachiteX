@@ -14,6 +14,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { tokenStore } from "@/lib/api";
+import { friendlyErrorMessage } from "@/lib/errors";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import { normalizeTradeStatus, type CanonicalTradeStatus, tradeStatusLabel } from "@/lib/status";
 import { tradesService, type TradeRecord, type TradeMessage } from "@/services/trades.service";
@@ -198,7 +199,7 @@ export default function TradePage() {
 
   async function loadTrade() {
     if (!token) {
-      setError("Please sign in to open this P2P trade workspace.");
+      setError("Please sign in to open this trade workspace.");
       setLoading(false);
       return;
     }
@@ -216,7 +217,7 @@ export default function TradePage() {
 
       setError(null);
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to load this trade right now."));
     } finally {
       setLoading(false);
     }
@@ -256,7 +257,7 @@ export default function TradePage() {
       setPaymentProofUrl("");
       await loadTrade();
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to mark payment as sent right now."));
     } finally {
       setSubmitting(false);
     }
@@ -271,7 +272,7 @@ export default function TradePage() {
       await tradesService.release(token, trade.id);
       await loadTrade();
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to release escrow right now."));
     } finally {
       setSubmitting(false);
     }
@@ -286,7 +287,7 @@ export default function TradePage() {
       await tradesService.cancel(token, trade.id);
       await loadTrade();
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to cancel this trade right now."));
     } finally {
       setSubmitting(false);
     }
@@ -308,7 +309,7 @@ export default function TradePage() {
       setDisputeProofUrl("");
       await loadTrade();
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to open a dispute right now."));
     } finally {
       setSubmitting(false);
     }
@@ -331,7 +332,7 @@ export default function TradePage() {
       (event.currentTarget as HTMLFormElement).reset();
       await loadTrade();
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to send this message right now."));
     } finally {
       setSubmitting(false);
     }
@@ -347,7 +348,7 @@ export default function TradePage() {
       await tradesService.sendMessage(token, trade.id, "status update");
       await loadTrade();
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Trade assistant is temporarily unavailable."));
     } finally {
       setSubmitting(false);
     }

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
+import { friendlyErrorMessage } from "@/lib/errors";
 
 const signupSchema = z
   .object({
@@ -91,7 +92,7 @@ export default function SignupPage() {
 
       router.replace("/dashboard");
     } catch (error) {
-      setFormError((error as Error).message || "Unable to create account");
+      setFormError(friendlyErrorMessage(error, "Unable to create your account right now."));
     } finally {
       setLoading(false);
     }

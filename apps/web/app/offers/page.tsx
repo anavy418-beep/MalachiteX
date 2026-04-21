@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { tokenStore } from "@/lib/api";
+import { friendlyErrorMessage } from "@/lib/errors";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import { offersService, type OfferRecord } from "@/services/offers.service";
 import { Button } from "@/components/ui/button";
@@ -43,7 +44,7 @@ export default function OffersPage() {
       );
       setError(null);
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to load your offers right now."));
     } finally {
       setLoading(false);
     }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { tokenStore } from "@/lib/api";
+import { friendlyErrorMessage } from "@/lib/errors";
 import { formatMinorUnits } from "@/lib/money";
 import { useAuth } from "@/hooks/use-auth";
 import { offersService } from "@/services/offers.service";
@@ -114,7 +115,7 @@ export default function CreateOfferPage() {
       toast.success("Offer published");
       setTimeout(() => router.push("/offers"), 700);
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to publish this offer right now."));
     } finally {
       setSubmitting(false);
     }

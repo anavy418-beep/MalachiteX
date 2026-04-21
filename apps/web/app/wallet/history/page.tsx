@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Clock3, Filter } from "lucide-react";
 import { tokenStore } from "@/lib/api";
+import { friendlyErrorMessage } from "@/lib/errors";
 import { DEMO_DEPOSITS, DEMO_WALLET_SUMMARY, DEMO_WITHDRAWALS } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import {
@@ -120,7 +121,7 @@ export default function WalletHistoryPage() {
       } catch (err) {
         setCurrency(DEMO_WALLET_SUMMARY.currency);
         setHistory(buildHistory(DEMO_WALLET_SUMMARY.ledger, DEMO_DEPOSITS, DEMO_WITHDRAWALS));
-        setError((err as Error).message);
+        setError(friendlyErrorMessage(err, "Live wallet history is temporarily unavailable."));
       } finally {
         setLoading(false);
       }

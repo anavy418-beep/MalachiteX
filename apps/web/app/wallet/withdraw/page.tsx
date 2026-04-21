@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { ArrowUpFromLine, Clock3 } from "lucide-react";
 import { tokenStore } from "@/lib/api";
+import { friendlyErrorMessage } from "@/lib/errors";
 import { DEMO_WITHDRAWALS } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import { walletService, type WithdrawalRecord } from "@/services/wallet.service";
@@ -62,7 +63,7 @@ export default function WalletWithdrawPage() {
     } catch (err) {
       setRecords(DEMO_WITHDRAWALS);
       setIsDemo(true);
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Live withdrawal history is temporarily unavailable."));
     } finally {
       setLoading(false);
     }
@@ -94,7 +95,7 @@ export default function WalletWithdrawPage() {
       (event.currentTarget as HTMLFormElement).reset();
       await loadRecords();
     } catch (err) {
-      setError((err as Error).message);
+      setError(friendlyErrorMessage(err, "Unable to submit this withdrawal request."));
     } finally {
       setSubmitting(false);
     }
