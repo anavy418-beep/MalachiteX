@@ -112,7 +112,16 @@ export async function GET(
     });
 
     const payloadText = await upstreamResponse.text();
-    const parsedPayload = payloadText.length > 0 ? JSON.parse(payloadText) : null;
+    const parsedPayload =
+      payloadText.length > 0
+        ? (() => {
+            try {
+              return JSON.parse(payloadText);
+            } catch {
+              return { message: payloadText.slice(0, 240) };
+            }
+          })()
+        : null;
 
     if (!upstreamResponse.ok) {
       const details =

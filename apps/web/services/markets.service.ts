@@ -227,6 +227,85 @@ function filterFallbackPairs(search: string, limit: number) {
   return filtered.slice(0, Math.max(1, limit));
 }
 
+function buildFallbackOverview(symbols: string[]) {
+  const normalizedSymbols = symbols
+    .map((symbol) => normalizeOrderBookSymbol(symbol))
+    .filter((symbol) => symbol.length >= 6 && symbol.length <= 20);
+  const sourceSymbols = normalizedSymbols.length > 0 ? normalizedSymbols : FALLBACK_PAIR_SYMBOLS.slice(0, 8);
+  const pairs = sourceSymbols.map((symbol, index) => buildFallbackTicker(symbol, index));
+  const sortedByChange = [...pairs].sort(
+    (left, right) =>
+      Number.parseFloat(right.priceChangePercent) - Number.parseFloat(left.priceChangePercent),
+  );
+
+  return {
+    pairs,
+    topGainers: sortedByChange.slice(0, 5),
+    topLosers: [...sortedByChange].reverse().slice(0, 5),
+    source: "binance" as const,
+    streaming: false,
+    updatedAt: Date.now(),
+  } satisfies MarketOverviewResponse;
+}
+
+function coerceOverviewPayload(payload: unknown): MarketOverviewResponse | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const record = payload as Partial<MarketOverviewResponse>;
+  if (!Array.isArray(record.pairs)) {
+    return null;
+  }
+
+  return {
+    pairs: record.pairs,
+    topGainers: Array.isArray(record.topGainers) ? record.topGainers : [],
+    topLosers: Array.isArray(record.topLosers) ? record.topLosers : [],
+    source: "binance",
+    streaming: typeof record.streaming === "boolean" ? record.streaming : false,
+    updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now(),
+  };
+}
+
+function coercePairsPayload(payload: unknown): MarketPairsResponse | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const record = payload as Partial<MarketPairsResponse>;
+  if (!Array.isArray(record.pairs)) {
+    return null;
+  }
+
+  return {
+    pairs: record.pairs,
+    updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now(),
+    source: "binance",
+  };
+}
+
+export function toMarketDataErrorMessage(
+  error: unknown,
+  fallback = "Unable to load market data.",
+) {
+  const rawMessage = error instanceof Error ? error.message : String(error ?? "");
+  const message = rawMessage.trim();
+  if (!message) {
+    return fallback;
+  }
+
+  if (
+    /cannot get|failed to fetch|network|timeout|unexpected token|market endpoint not found|request failed/i.test(
+      message,
+    )
+  ) {
+    return fallback;
+  }
+
+  return message.length > 180 ? fallback : message;
+}
+
 function normalizeOrderBookSymbol(symbol: string) {
   return String(symbol ?? "")
     .trim()
@@ -449,34 +528,85 @@ async function fetchOrderBookFromCandidates(params: URLSearchParams) {
 }
 
 export const marketsService = {
-  getOverview(symbols: string[]) {
+  async getOverview(symbols: string[]) {
     const params = new URLSearchParams();
     if (symbols.length > 0) {
       params.set("symbols", symbols.join(","));
     }
 
     const suffix = params.toString() ? `?${params.toString()}` : "";
-    return apiRequest<MarketOverviewResponse>(`/markets/overview${suffix}`);
+    const localRoutePath = `/api/markets/overview${suffix}`;
+
+    if (typeof window !== "undefined") {
+      try {
+        const localResponse = await fetch(localRoutePath, {
+          cache: "no-store",
+        });
+        if (localResponse.ok) {
+          const localPayload = await localResponse.json().catch(() => null);
+          const normalized = coerceOverviewPayload(localPayload);
+          if (normalized) {
+            return normalized;
+          }
+        }
+      } catch {
+        // Continue to backend/api fallbacks.
+      }
+    }
+
+    try {
+      const upstreamPayload = await apiRequest<MarketOverviewResponse>(`/markets/overview${suffix}`);
+      const normalized = coerceOverviewPayload(upstreamPayload);
+      if (normalized) {
+        return normalized;
+      }
+    } catch (primaryError) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("getOverview fallback activated after API error:", primaryError);
+      }
+    }
+
+    return buildFallbackOverview(symbols);
   },
 
   async searchPairs(search: string, limit = 20) {
     const params = new URLSearchParams();
     if (search.trim()) params.set("search", search.trim());
     params.set("limit", String(limit));
+    const localRoutePath = `/api/markets/pairs?${params.toString()}`;
+
+    if (typeof window !== "undefined") {
+      try {
+        const localResponse = await fetch(localRoutePath, {
+          cache: "no-store",
+        });
+
+        if (localResponse.ok) {
+          const localPayload = await localResponse.json().catch(() => null);
+          const normalized = coercePairsPayload(localPayload);
+          if (normalized) {
+            return normalized;
+          }
+        }
+      } catch {
+        // Continue to backend/api fallback.
+      }
+    }
 
     try {
       return await apiRequest<MarketPairsResponse>(`/markets/pairs?${params.toString()}`);
     } catch (primaryError) {
       if (typeof window !== "undefined") {
         try {
-          const localResponse = await fetch(`/api/markets/pairs?${params.toString()}`, {
+          const localResponse = await fetch(localRoutePath, {
             cache: "no-store",
           });
 
           if (localResponse.ok) {
-            const localPayload = (await localResponse.json()) as MarketPairsResponse;
-            if (localPayload && Array.isArray(localPayload.pairs)) {
-              return localPayload;
+            const localPayload = await localResponse.json().catch(() => null);
+            const normalized = coercePairsPayload(localPayload);
+            if (normalized) {
+              return normalized;
             }
           }
         } catch {

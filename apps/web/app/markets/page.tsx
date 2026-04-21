@@ -31,6 +31,7 @@ import { RecentTradesFeed } from "@/components/markets/recent-trades-feed";
 import {
   MARKET_TIMEFRAMES,
   marketsService,
+  toMarketDataErrorMessage,
   type MarketCandle,
   type MarketOrderBookSnapshot,
   type MarketRecentTrade,
@@ -628,7 +629,7 @@ function MarketsPageContent() {
         setRestFallback(!overview.streaming);
       } catch (err) {
         if (cancelled) return;
-        const message = (err as Error).message;
+        const message = toMarketDataErrorMessage(err, "Unable to load market data.");
         if (shouldFallbackToDefaultMarketSymbol(message)) {
           setSelectedSymbol((current) => (current === TRACKED_SYMBOLS[0] ? current : TRACKED_SYMBOLS[0]));
         }

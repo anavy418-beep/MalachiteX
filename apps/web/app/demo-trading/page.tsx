@@ -35,6 +35,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import {
   MARKET_TIMEFRAMES,
   marketsService,
+  toMarketDataErrorMessage,
   type MarketCandle,
   type MarketOrderBookSnapshot,
   type MarketRecentTrade,
@@ -729,7 +730,11 @@ function DemoTradingPageContent() {
           setRestFallback(!overviewResult.value.streaming);
         } else {
           setRestFallback(true);
-          setError((previous) => previous ?? overviewResult.reason?.message ?? "Unable to load market overview.");
+          setError(
+            (previous) =>
+              previous ??
+              toMarketDataErrorMessage(overviewResult.reason, "Unable to load market data."),
+          );
         }
 
         if (candlesResult.status === "fulfilled") {
@@ -747,7 +752,7 @@ function DemoTradingPageContent() {
         console.error("Trade desk init failed:", err);
         setRestFallback(true);
         setPaperAccount((current) => current ?? buildFallbackPaperAccountSummary());
-        setError((err as Error).message);
+        setError(toMarketDataErrorMessage(err, "Unable to load market data."));
       } finally {
         if (active) {
           setIsPageLoading(false);
@@ -794,7 +799,7 @@ function DemoTradingPageContent() {
         setRestFallback(!overview.streaming);
       } catch (err) {
         if (!cancelled) {
-          const message = (err as Error).message;
+          const message = toMarketDataErrorMessage(err, "Unable to load market data.");
           if (shouldFallbackToDefaultMarketSymbol(message)) {
             setSelectedSymbol((current) => (current === TRACKED_SYMBOLS[0] ? current : TRACKED_SYMBOLS[0]));
           }
