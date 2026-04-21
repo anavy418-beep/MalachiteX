@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const BINANCE_REST_BASE_URL = "https://api.binance.com";
+const DEFAULT_SYMBOL = "BTCUSDT";
 const DEFAULT_LIMIT = 20;
 const ALLOWED_LIMITS = [5, 10, 20, 50, 100, 500, 1000] as const;
 
@@ -18,6 +19,12 @@ type OrderBookLevel = {
   quantity: string;
   cumulativeQuantity: string;
   side: "BID" | "ASK";
+};
+
+type NumericOrderBookLevel = {
+  price: number;
+  quantity: number;
+  total: number;
 };
 
 function errorResponse(status: number, message: string, details: string) {
@@ -35,11 +42,21 @@ function errorResponse(status: number, message: string, details: string) {
   );
 }
 
-function normalizeSymbol(input: string | null) {
-  return String(input ?? "")
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "");
+function parseSymbol(input: string | null) {
+  if (!input || input.trim().length === 0) {
+    return {
+      symbol: DEFAULT_SYMBOL,
+      isValid: true,
+    } as const;
+  }
+
+  const symbol = input.trim().toUpperCase();
+  const isValid = /^[A-Z0-9]{6,20}$/.test(symbol);
+
+  return {
+    symbol,
+    isValid,
+  } as const;
 }
 
 function normalizeLimit(rawLimit: string | null) {
@@ -48,18 +65,19 @@ function normalizeLimit(rawLimit: string | null) {
   }
 
   if (!/^\d+$/.test(rawLimit.trim())) {
-    return null;
+    return DEFAULT_LIMIT;
   }
 
   const parsed = Number.parseInt(rawLimit, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    return null;
+    return DEFAULT_LIMIT;
   }
 
-  return (
-    ALLOWED_LIMITS.find((allowed) => allowed >= parsed) ??
-    ALLOWED_LIMITS[ALLOWED_LIMITS.length - 1]
-  );
+  if (ALLOWED_LIMITS.includes(parsed as (typeof ALLOWED_LIMITS)[number])) {
+    return parsed;
+  }
+
+  return DEFAULT_LIMIT;
 }
 
 function toFixedString(value: number, maxDigits = 8) {
@@ -92,6 +110,24 @@ function normalizeDepthLevels(
     .filter((level): level is OrderBookLevel => Boolean(level));
 }
 
+function normalizeNumericDepthLevels(levels: [string, string][]) {
+  return levels
+    .map(([priceRaw, qtyRaw]) => {
+      const price = Number.parseFloat(priceRaw);
+      const quantity = Number.parseFloat(qtyRaw);
+      if (!Number.isFinite(price) || !Number.isFinite(quantity) || price <= 0 || quantity <= 0) {
+        return null;
+      }
+
+      return {
+        price,
+        quantity,
+        total: Number((price * quantity).toFixed(8)),
+      } satisfies NumericOrderBookLevel;
+    })
+    .filter((level): level is NumericOrderBookLevel => Boolean(level));
+}
+
 function computeSpread(bestBid: string | null, bestAsk: string | null) {
   if (!bestBid || !bestAsk) return null;
 
@@ -105,22 +141,15 @@ function computeSpread(bestBid: string | null, bestAsk: string | null) {
 }
 
 export async function GET(request: NextRequest) {
-  const symbol = normalizeSymbol(request.nextUrl.searchParams.get("symbol"));
+  const symbolCandidate = parseSymbol(request.nextUrl.searchParams.get("symbol"));
+  const symbol = symbolCandidate.symbol;
   const normalizedLimit = normalizeLimit(request.nextUrl.searchParams.get("limit"));
 
-  if (!symbol || symbol.length < 6 || symbol.length > 20) {
+  if (!symbolCandidate.isValid) {
     return errorResponse(
       400,
       "Invalid symbol query parameter.",
       "symbol is required and must look like BTCUSDT.",
-    );
-  }
-
-  if (normalizedLimit === null) {
-    return errorResponse(
-      400,
-      "Invalid limit query parameter.",
-      "limit must be a positive integer (for example: limit=20).",
     );
   }
 
@@ -145,6 +174,15 @@ export async function GET(request: NextRequest) {
       throw new Error("Unexpected Binance depth payload shape.");
     }
 
+    const numericBids = normalizeNumericDepthLevels(payload.bids);
+    const numericAsks = normalizeNumericDepthLevels(payload.asks);
+    const bestBidValue = numericBids[0]?.price ?? null;
+    const bestAskValue = numericAsks[0]?.price ?? null;
+    const spreadValue =
+      bestBidValue !== null && bestAskValue !== null
+        ? Number((bestAskValue - bestBidValue).toFixed(8))
+        : null;
+
     const bids = normalizeDepthLevels(payload.bids, "BID");
     const asks = normalizeDepthLevels(payload.asks, "ASK");
     const bestBid = bids[0]?.price ?? null;
@@ -155,6 +193,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       {
         symbol,
+        lastUpdateId: payload.lastUpdateId ?? null,
+        bids: numericBids,
+        asks: numericAsks,
+        bestBid: bestBidValue,
+        bestAsk: bestAskValue,
+        spread: spreadValue,
+        source: "binance",
         orderBook: {
           symbol,
           bids,
@@ -167,7 +212,6 @@ export async function GET(request: NextRequest) {
           streaming: false,
           lastUpdateId: payload.lastUpdateId,
         },
-        source: "binance",
         updatedAt,
         streaming: false,
       },
@@ -183,4 +227,3 @@ export async function GET(request: NextRequest) {
     return errorResponse(502, "Failed to load order book data.", details);
   }
 }
-

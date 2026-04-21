@@ -256,6 +256,115 @@ function buildFallbackOrderBookSnapshot(symbol: string): MarketOrderBookSnapshot
   };
 }
 
+type LocalOrderBookNumericLevel = {
+  price: number;
+  quantity: number;
+};
+
+type LocalOrderBookFlatPayload = {
+  symbol?: unknown;
+  bids?: unknown;
+  asks?: unknown;
+  bestBid?: unknown;
+  bestAsk?: unknown;
+  spread?: unknown;
+  source?: unknown;
+  updatedAt?: unknown;
+  streaming?: unknown;
+};
+
+function toDecimalString(value: number, maxDigits = 8) {
+  if (!Number.isFinite(value)) return "0";
+  return value.toFixed(maxDigits).replace(/0+$/, "").replace(/\.$/, "") || "0";
+}
+
+function normalizeLocalOrderBookLevels(levels: LocalOrderBookNumericLevel[], side: "BID" | "ASK") {
+  let cumulative = 0;
+  return levels
+    .map((level) => {
+      const price = Number(level.price);
+      const quantity = Number(level.quantity);
+      if (!Number.isFinite(price) || !Number.isFinite(quantity) || price <= 0 || quantity <= 0) {
+        return null;
+      }
+      cumulative += quantity;
+      return {
+        price: toDecimalString(price),
+        quantity: toDecimalString(quantity),
+        cumulativeQuantity: toDecimalString(cumulative),
+        side,
+      } satisfies MarketOrderBookLevel;
+    })
+    .filter((level): level is MarketOrderBookLevel => Boolean(level));
+}
+
+function parseOrderBookNumericLevels(input: unknown): LocalOrderBookNumericLevel[] {
+  if (!Array.isArray(input)) return [];
+
+  return input
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const record = entry as Record<string, unknown>;
+      const price = Number(record.price);
+      const quantity = Number(record.quantity);
+      if (!Number.isFinite(price) || !Number.isFinite(quantity)) {
+        return null;
+      }
+      return { price, quantity } satisfies LocalOrderBookNumericLevel;
+    })
+    .filter((level): level is LocalOrderBookNumericLevel => Boolean(level));
+}
+
+function coerceLocalOrderBookPayload(payload: unknown): MarketOrderBookResponse | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  if ("orderBook" in payload) {
+    const typed = payload as Partial<MarketOrderBookResponse>;
+    if (typed.orderBook && typed.symbol) {
+      return typed as MarketOrderBookResponse;
+    }
+  }
+
+  const flat = payload as LocalOrderBookFlatPayload;
+  const symbolCandidate = normalizeOrderBookSymbol(String(flat.symbol ?? ""));
+  const symbol =
+    symbolCandidate.length >= 6 && symbolCandidate.length <= 20 ? symbolCandidate : "BTCUSDT";
+  const bids = normalizeLocalOrderBookLevels(parseOrderBookNumericLevels(flat.bids), "BID");
+  const asks = normalizeLocalOrderBookLevels(parseOrderBookNumericLevels(flat.asks), "ASK");
+  const bestBid =
+    Number.isFinite(Number(flat.bestBid)) && Number(flat.bestBid) > 0
+      ? toDecimalString(Number(flat.bestBid))
+      : bids[0]?.price ?? null;
+  const bestAsk =
+    Number.isFinite(Number(flat.bestAsk)) && Number(flat.bestAsk) > 0
+      ? toDecimalString(Number(flat.bestAsk))
+      : asks[0]?.price ?? null;
+  const spread =
+    Number.isFinite(Number(flat.spread)) && Number(flat.spread) >= 0 ? toDecimalString(Number(flat.spread)) : null;
+  const updatedAt =
+    typeof flat.updatedAt === "number" && Number.isFinite(flat.updatedAt) ? flat.updatedAt : Date.now();
+
+  return {
+    symbol,
+    orderBook: {
+      symbol,
+      bids,
+      asks,
+      bestBid,
+      bestAsk,
+      spread,
+      updatedAt,
+      source: "binance",
+      streaming: Boolean(flat.streaming),
+    },
+    source: "binance",
+    updatedAt,
+    streaming: Boolean(flat.streaming),
+  };
+}
+
 async function fetchLocalOrderBook(params: URLSearchParams) {
   if (typeof window === "undefined") {
     return null;
@@ -269,12 +378,8 @@ async function fetchLocalOrderBook(params: URLSearchParams) {
     return null;
   }
 
-  const localPayload = (await localResponse.json()) as Partial<MarketOrderBookResponse>;
-  if (!localPayload || !localPayload.orderBook) {
-    return null;
-  }
-
-  return localPayload as MarketOrderBookResponse;
+  const localPayload = await localResponse.json().catch(() => null);
+  return coerceLocalOrderBookPayload(localPayload);
 }
 
 export const marketsService = {
