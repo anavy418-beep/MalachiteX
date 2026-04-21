@@ -283,7 +283,7 @@ export function LightweightMarketChart({
         <div ref={containerRef} className="h-full w-full" />
       </div>
 
-      {parsedCandles.length === 0 ? (
+      {parsedCandles.length === 0 && streamState === "DELAYED" ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-slate-400">
           Loading live chart...
         </div>

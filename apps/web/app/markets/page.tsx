@@ -115,6 +115,35 @@ type BinanceWsKlinePayload = {
   };
 };
 
+type BinanceTicker24hResponse = {
+  symbol: string;
+  lastPrice: string;
+  openPrice: string;
+  highPrice: string;
+  lowPrice: string;
+  priceChangePercent: string;
+  quoteVolume: string;
+};
+
+type BinanceWsTickerPayload = {
+  s: string;
+  c: string;
+  o: string;
+  h: string;
+  l: string;
+  P: string;
+  q: string;
+};
+
+type LiveStatSnapshot = {
+  lastPrice: string;
+  openPrice: string;
+  highPrice: string;
+  lowPrice: string;
+  priceChangePercent: string;
+  quoteVolume: string;
+};
+
 const STABLE_SYMBOLS = new Set(["USDT", "USDC", "DAI", "FDUSD", "USDE"]);
 const MEME_SYMBOLS = new Set(["DOGE", "SHIB", "PEPE", "BONK", "WIF", "FLOKI"]);
 const EXCHANGE_SYMBOLS = new Set(["BNB", "OKB", "LEO", "BGB", "CRO", "KCS"]);
@@ -203,14 +232,49 @@ function mapBinanceWsKlineToMarketCandle(kline: NonNullable<BinanceWsKlinePayloa
 }
 
 function mergeIncomingCandle(current: MarketCandle[], incoming: MarketCandle) {
+  if (current.length === 0) {
+    return [incoming];
+  }
+
+  const last = current[current.length - 1];
+  if (last.openTime === incoming.openTime) {
+    return [...current.slice(0, -1), incoming];
+  }
+
+  if (incoming.openTime > last.openTime) {
+    return [...current, incoming].slice(-CHART_BOOTSTRAP_LIMIT);
+  }
+
   const next = [...current];
   const index = next.findIndex((entry) => entry.openTime === incoming.openTime);
   if (index >= 0) {
     next[index] = incoming;
-  } else {
-    next.push(incoming);
+    return next;
   }
-  return next.sort((left, right) => left.openTime - right.openTime).slice(-CHART_BOOTSTRAP_LIMIT);
+
+  return [...next, incoming].sort((left, right) => left.openTime - right.openTime).slice(-CHART_BOOTSTRAP_LIMIT);
+}
+
+function mapBinanceTickerToLiveStats(payload: BinanceTicker24hResponse | BinanceWsTickerPayload): LiveStatSnapshot {
+  if ("lastPrice" in payload) {
+    return {
+      lastPrice: payload.lastPrice,
+      openPrice: payload.openPrice,
+      highPrice: payload.highPrice,
+      lowPrice: payload.lowPrice,
+      priceChangePercent: payload.priceChangePercent,
+      quoteVolume: payload.quoteVolume,
+    };
+  }
+
+  return {
+    lastPrice: payload.c,
+    openPrice: payload.o,
+    highPrice: payload.h,
+    lowPrice: payload.l,
+    priceChangePercent: payload.P,
+    quoteVolume: payload.q,
+  };
 }
 
 function formatPrice(price: string) {
@@ -299,12 +363,16 @@ function MarketsPageContent() {
   const [marketData, setMarketData] = useState<LiveMarketCoin[]>([]);
   const [marketLoading, setMarketLoading] = useState(true);
   const [marketError, setMarketError] = useState<string | null>(null);
+  const [marketRefreshNonce, setMarketRefreshNonce] = useState(0);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [marketPollMs, setMarketPollMs] = useState(10_000);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [restFallback, setRestFallback] = useState(false);
   const [chartStreamState, setChartStreamState] = useState<"LIVE" | "RECONNECTING" | "DELAYED">("DELAYED");
   const [liveChartPrice, setLiveChartPrice] = useState<string | null>(null);
+  const [liveStats, setLiveStats] = useState<LiveStatSnapshot | null>(null);
+  const [chartBootstrapError, setChartBootstrapError] = useState<string | null>(null);
+  const [chartRefreshNonce, setChartRefreshNonce] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
@@ -416,7 +484,7 @@ function MarketsPageContent() {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [marketPollMs]);
+  }, [marketPollMs, marketRefreshNonce]);
 
   useEffect(() => {
     setSelectedSymbol((current) =>
@@ -540,6 +608,7 @@ function MarketsPageContent() {
 
     setChartStreamState("DELAYED");
     setLiveChartPrice(null);
+    setChartBootstrapError(null);
 
     const connectStream = () => {
       if (!active) return;
@@ -603,9 +672,11 @@ function MarketsPageContent() {
         if (last) {
           setLiveChartPrice(last.close);
         }
-      } catch {
+      } catch (bootstrapError) {
         if (!active) return;
-        setCandles([]);
+        const message =
+          bootstrapError instanceof Error ? bootstrapError.message : "Unable to load chart candles.";
+        setChartBootstrapError(message);
       } finally {
         connectStream();
       }
@@ -622,7 +693,70 @@ function MarketsPageContent() {
         ws.close();
       }
     };
-  }, [selectedInterval, selectedSymbol]);
+  }, [selectedInterval, selectedSymbol, chartRefreshNonce]);
+
+  useEffect(() => {
+    let active = true;
+    let reconnectTimerId: number | null = null;
+    let ws: WebSocket | null = null;
+
+    const normalizedSymbol = selectedSymbol.toUpperCase();
+    const tickerStreamName = `${normalizedSymbol.toLowerCase()}@ticker`;
+
+    const connectTickerStream = () => {
+      if (!active) return;
+
+      ws = new WebSocket(`${BINANCE_STREAM_BASE_URL}/${tickerStreamName}`);
+      ws.onmessage = (event) => {
+        if (!active) return;
+        try {
+          const payload = JSON.parse(event.data) as BinanceWsTickerPayload;
+          if (!payload?.s || payload.s !== normalizedSymbol) return;
+          setLiveStats(mapBinanceTickerToLiveStats(payload));
+        } catch {
+          // Ignore malformed frames and wait for next frame.
+        }
+      };
+      ws.onclose = () => {
+        if (!active) return;
+        reconnectTimerId = window.setTimeout(() => {
+          connectTickerStream();
+        }, CHART_RECONNECT_DELAY_MS);
+      };
+    };
+
+    async function bootstrapLiveStats() {
+      try {
+        const response = await fetch(
+          `${BINANCE_REST_BASE_URL}/api/v3/ticker/24hr?symbol=${normalizedSymbol}`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) {
+          throw new Error(`Failed to load ticker snapshot (${response.status})`);
+        }
+        const payload = (await response.json()) as BinanceTicker24hResponse;
+        if (!active) return;
+        setLiveStats(mapBinanceTickerToLiveStats(payload));
+      } catch {
+        if (!active) return;
+        setLiveStats(null);
+      } finally {
+        connectTickerStream();
+      }
+    }
+
+    void bootstrapLiveStats();
+
+    return () => {
+      active = false;
+      if (reconnectTimerId !== null) {
+        window.clearTimeout(reconnectTimerId);
+      }
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        ws.close();
+      }
+    };
+  }, [selectedSymbol]);
 
   useEffect(() => {
     let cancelled = false;
@@ -667,6 +801,12 @@ function MarketsPageContent() {
 
     return () => window.clearInterval(interval);
   }, [isSocketConnected, selectedInterval, selectedSymbol]);
+
+  const displayedLastPrice = liveChartPrice ?? liveStats?.lastPrice ?? selectedPair?.lastPrice ?? null;
+  const displayedChangePercent = liveStats?.priceChangePercent ?? selectedPair?.priceChangePercent ?? null;
+  const displayedHighPrice = liveStats?.highPrice ?? selectedPair?.highPrice ?? null;
+  const displayedLowPrice = liveStats?.lowPrice ?? selectedPair?.lowPrice ?? null;
+  const displayedVolume = liveStats?.quoteVolume ?? selectedPair?.quoteVolume ?? null;
 
   return (
     <section className="space-y-6">
@@ -808,9 +948,21 @@ function MarketsPageContent() {
             </p>
           ) : null}
           {marketError ? (
-            <p className="rounded-xl border border-amber-800/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
-              Live feed notice: {marketError}
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-800/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+              <span>Live feed notice: {marketError}</span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2.5 text-[11px]"
+                onClick={() => {
+                  setMarketError(null);
+                  setMarketLoading(true);
+                  setMarketRefreshNonce((current) => current + 1);
+                }}
+              >
+                Retry
+              </Button>
+            </div>
           ) : null}
 
           {fullMarketRows.length > 0 ? (
@@ -956,40 +1108,50 @@ function MarketsPageContent() {
               <div className="grid gap-3 md:grid-cols-5">
                 <MetricCard
                   title="Last Price"
-                  value={liveChartPrice ? formatPrice(liveChartPrice) : selectedPair ? formatPrice(selectedPair.lastPrice) : "-"}
+                  value={displayedLastPrice ? formatPrice(displayedLastPrice) : "-"}
                   accent="text-white"
                 />
                 <MetricCard
                   title="24h Change"
-                  value={selectedPair ? formatPercent(selectedPair.priceChangePercent) : "-"}
-                  accent={selectedPair ? toneForChange(selectedPair.priceChangePercent) : "text-slate-200"}
+                  value={displayedChangePercent ? formatPercent(displayedChangePercent) : "-"}
+                  accent={displayedChangePercent ? toneForChange(displayedChangePercent) : "text-slate-200"}
                 />
                 <MetricCard
                   title="24h High"
-                  value={selectedPair ? formatPrice(selectedPair.highPrice) : "-"}
+                  value={displayedHighPrice ? formatPrice(displayedHighPrice) : "-"}
                   accent="text-slate-100"
                 />
                 <MetricCard
                   title="24h Low"
-                  value={selectedPair ? formatPrice(selectedPair.lowPrice) : "-"}
+                  value={displayedLowPrice ? formatPrice(displayedLowPrice) : "-"}
                   accent="text-slate-100"
                 />
                 <MetricCard
                   title="24h Volume"
-                  value={
-                    selectedPair
-                      ? formatVolume(selectedPair.quoteVolume)
-                      : "-"
-                  }
+                  value={displayedVolume ? formatVolume(displayedVolume) : "-"}
                   accent="text-slate-100"
                 />
               </div>
+
+              {chartBootstrapError ? (
+                <div className="flex items-center justify-between rounded-xl border border-amber-800/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+                  <span>Chart bootstrap notice: {chartBootstrapError}</span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2.5 text-[11px]"
+                    onClick={() => setChartRefreshNonce((current) => current + 1)}
+                  >
+                    Retry
+                  </Button>
+                </div>
+              ) : null}
 
               <MarketChartShell
                 candles={candles}
                 symbol={selectedSymbol}
                 interval={selectedInterval}
-                currentPrice={liveChartPrice ?? selectedPair?.lastPrice ?? null}
+                currentPrice={displayedLastPrice}
                 streamState={chartStreamState}
               />
             </CardContent>
