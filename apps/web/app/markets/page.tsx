@@ -329,6 +329,21 @@ function formatCompact(value: number) {
   }).format(value);
 }
 
+function toDisplayPairLabel(symbol: string | null | undefined) {
+  if (!symbol) return "BTC/USDT";
+
+  const normalized = symbol.toUpperCase();
+  const quoteAssets = ["USDT", "USDC", "BUSD", "BTC", "ETH"];
+
+  for (const quote of quoteAssets) {
+    if (normalized.endsWith(quote) && normalized.length > quote.length) {
+      return `${normalized.slice(0, -quote.length)}/${quote}`;
+    }
+  }
+
+  return normalized;
+}
+
 function MarketsPageContent() {
   const router = useRouter();
   const pathname = usePathname();
@@ -384,6 +399,10 @@ function MarketsPageContent() {
   const selectedPair = useMemo(
     () => [...overviewPairs, ...searchResults].find((pair) => pair.symbol === selectedSymbol) ?? null,
     [overviewPairs, searchResults, selectedSymbol],
+  );
+  const activePairLabel = useMemo(
+    () => selectedPair?.displaySymbol ?? toDisplayPairLabel(selectedSymbol),
+    [selectedPair?.displaySymbol, selectedSymbol],
   );
   const selectablePairs = useMemo(() => {
     const map = new Map<string, MarketTickerSnapshot>();
@@ -1127,7 +1146,7 @@ function MarketsPageContent() {
           <Card>
             <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-4">
               <div>
-                <CardTitle className="text-xl">{selectedPair?.displaySymbol ?? "Loading pair"}</CardTitle>
+                <CardTitle className="text-xl">{activePairLabel}</CardTitle>
                 <CardDescription>Live spot price, 24h move, and responsive candlestick view</CardDescription>
               </div>
               <div className="flex flex-wrap gap-2">
