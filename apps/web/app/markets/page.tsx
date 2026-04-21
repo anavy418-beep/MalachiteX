@@ -51,6 +51,10 @@ const MARKET_SORT_OPTIONS: Array<{ value: MarketSortOption; label: string }> = [
 const FALLBACK_COIN_ICON = "/icons/coin-fallback.png";
 const COINGECKO_MARKETS_ENDPOINT =
   "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1&sparkline=true&price_change_percentage=24h";
+const BINANCE_REST_BASE_URL = "https://api.binance.com";
+const BINANCE_STREAM_BASE_URL = "wss://stream.binance.com:9443/ws";
+const CHART_BOOTSTRAP_LIMIT = 100;
+const CHART_RECONNECT_DELAY_MS = 2_000;
 
 type CoinGeckoMarketItem = {
   id: string;
@@ -77,6 +81,38 @@ type LiveMarketCoin = {
   category: MarketCategory;
   icon: string;
   trend: number[];
+};
+
+type BinanceRestKline = [
+  number,
+  string,
+  string,
+  string,
+  string,
+  string,
+  number,
+  string,
+  number,
+  string,
+  string,
+  string?,
+];
+
+type BinanceWsKlinePayload = {
+  k?: {
+    t: number;
+    T: number;
+    s: string;
+    i: string;
+    o: string;
+    h: string;
+    l: string;
+    c: string;
+    v: string;
+    q: string;
+    n: number;
+    x: boolean;
+  };
 };
 
 const STABLE_SYMBOLS = new Set(["USDT", "USDC", "DAI", "FDUSD", "USDE"]);
@@ -124,6 +160,57 @@ function toLiveMarketCoin(coin: CoinGeckoMarketItem): LiveMarketCoin {
     icon: typeof coin.image === "string" && coin.image.length > 0 ? coin.image : FALLBACK_COIN_ICON,
     trend: safeTrend,
   };
+}
+
+function mapBinanceRestKlineToMarketCandle(
+  symbol: string,
+  interval: string,
+  entry: BinanceRestKline,
+): MarketCandle {
+  return {
+    symbol,
+    interval,
+    openTime: entry[0],
+    closeTime: entry[6],
+    open: entry[1],
+    high: entry[2],
+    low: entry[3],
+    close: entry[4],
+    volume: entry[5],
+    quoteVolume: entry[7],
+    tradeCount: entry[8],
+    isClosed: true,
+    updatedAt: Date.now(),
+  };
+}
+
+function mapBinanceWsKlineToMarketCandle(kline: NonNullable<BinanceWsKlinePayload["k"]>): MarketCandle {
+  return {
+    symbol: kline.s,
+    interval: kline.i,
+    openTime: kline.t,
+    closeTime: kline.T,
+    open: kline.o,
+    high: kline.h,
+    low: kline.l,
+    close: kline.c,
+    volume: kline.v,
+    quoteVolume: kline.q,
+    tradeCount: kline.n,
+    isClosed: kline.x,
+    updatedAt: Date.now(),
+  };
+}
+
+function mergeIncomingCandle(current: MarketCandle[], incoming: MarketCandle) {
+  const next = [...current];
+  const index = next.findIndex((entry) => entry.openTime === incoming.openTime);
+  if (index >= 0) {
+    next[index] = incoming;
+  } else {
+    next.push(incoming);
+  }
+  return next.sort((left, right) => left.openTime - right.openTime).slice(-CHART_BOOTSTRAP_LIMIT);
 }
 
 function formatPrice(price: string) {
@@ -216,6 +303,8 @@ function MarketsPageContent() {
   const [marketPollMs, setMarketPollMs] = useState(10_000);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [restFallback, setRestFallback] = useState(false);
+  const [chartStreamState, setChartStreamState] = useState<"LIVE" | "RECONNECTING" | "DELAYED">("DELAYED");
+  const [liveChartPrice, setLiveChartPrice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
@@ -353,10 +442,9 @@ function MarketsPageContent() {
       setError(null);
 
       try {
-        const [overview, pairSearch, candleResponse, orderBookResponse, recentTradesResponse] = await Promise.all([
+        const [overview, pairSearch, orderBookResponse, recentTradesResponse] = await Promise.all([
           marketsService.getOverview(TRACKED_SYMBOLS),
           marketsService.searchPairs("", 16),
-          marketsService.getCandles(selectedSymbol, selectedInterval),
           marketsService.getOrderBook(selectedSymbol, 20),
           marketsService.getRecentTrades(selectedSymbol, 50),
         ]);
@@ -367,7 +455,6 @@ function MarketsPageContent() {
         setTopGainers(overview.topGainers);
         setTopLosers(overview.topLosers);
         setSearchResults(pairSearch.pairs);
-        setCandles(candleResponse.candles);
         setOrderBook(orderBookResponse.orderBook);
         setRecentTrades(recentTradesResponse.trades);
         setRestFallback(!overview.streaming);
@@ -408,22 +495,6 @@ function MarketsPageContent() {
         setTopGainers((current) => replaceTicker(current, ticker));
         setTopLosers((current) => replaceTicker(current, ticker));
       },
-      onCandlesBootstrap(payload) {
-        if (payload.symbol === selectedSymbol && payload.interval === selectedInterval) {
-          setCandles(payload.candles);
-        }
-      },
-      onCandle(candle) {
-        if (candle.symbol !== selectedSymbol || candle.interval !== selectedInterval) return;
-
-        setCandles((current) => {
-          const next = [...current];
-          const index = next.findIndex((entry) => entry.openTime === candle.openTime);
-          if (index >= 0) next[index] = candle;
-          else next.push(candle);
-          return next.slice(-160);
-        });
-      },
       onOrderBookBootstrap(payload) {
         if (payload.symbol === selectedSymbol) {
           setOrderBook(payload.orderBook);
@@ -447,17 +518,109 @@ function MarketsPageContent() {
 
     connection.watchSymbols(TRACKED_SYMBOLS);
     connection.watchSymbols([selectedSymbol]);
-    connection.watchCandles(selectedSymbol, selectedInterval);
     connection.watchOrderBook(selectedSymbol);
     connection.watchRecentTrades(selectedSymbol, 60);
 
     return () => {
       connection.unwatchSymbols(TRACKED_SYMBOLS);
       connection.unwatchSymbols([selectedSymbol]);
-      connection.unwatchCandles(selectedSymbol, selectedInterval);
       connection.unwatchOrderBook(selectedSymbol);
       connection.unwatchRecentTrades(selectedSymbol);
       connection.disconnect();
+    };
+  }, [selectedInterval, selectedSymbol]);
+
+  useEffect(() => {
+    let active = true;
+    let reconnectTimerId: number | null = null;
+    let ws: WebSocket | null = null;
+
+    const normalizedSymbol = selectedSymbol.toUpperCase();
+    const streamName = `${normalizedSymbol.toLowerCase()}@kline_${selectedInterval}`;
+
+    setChartStreamState("DELAYED");
+    setLiveChartPrice(null);
+
+    const connectStream = () => {
+      if (!active) return;
+
+      ws = new WebSocket(`${BINANCE_STREAM_BASE_URL}/${streamName}`);
+
+      ws.onopen = () => {
+        if (!active) return;
+        setChartStreamState("LIVE");
+      };
+
+      ws.onmessage = (event) => {
+        if (!active) return;
+
+        try {
+          const payload = JSON.parse(event.data) as BinanceWsKlinePayload;
+          if (!payload.k || payload.k.s !== normalizedSymbol) return;
+
+          const nextCandle = mapBinanceWsKlineToMarketCandle(payload.k);
+          setCandles((current) => mergeIncomingCandle(current, nextCandle));
+          setLiveChartPrice(nextCandle.close);
+          setChartStreamState("LIVE");
+        } catch {
+          // Ignore malformed frames and keep stream alive.
+        }
+      };
+
+      ws.onerror = () => {
+        if (!active) return;
+        setChartStreamState("RECONNECTING");
+      };
+
+      ws.onclose = () => {
+        if (!active) return;
+        setChartStreamState("RECONNECTING");
+        reconnectTimerId = window.setTimeout(() => {
+          connectStream();
+        }, CHART_RECONNECT_DELAY_MS);
+      };
+    };
+
+    async function bootstrapCandles() {
+      try {
+        const response = await fetch(
+          `${BINANCE_REST_BASE_URL}/api/v3/klines?symbol=${normalizedSymbol}&interval=${selectedInterval}&limit=${CHART_BOOTSTRAP_LIMIT}`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) {
+          throw new Error(`Failed to bootstrap candles (${response.status})`);
+        }
+
+        const payload = (await response.json()) as BinanceRestKline[];
+        if (!active) return;
+
+        const mapped = payload.map((entry) =>
+          mapBinanceRestKlineToMarketCandle(normalizedSymbol, selectedInterval, entry),
+        );
+        setCandles(mapped);
+
+        const last = mapped[mapped.length - 1];
+        if (last) {
+          setLiveChartPrice(last.close);
+        }
+      } catch {
+        if (!active) return;
+        setCandles([]);
+      } finally {
+        connectStream();
+      }
+    }
+
+    void bootstrapCandles();
+
+    return () => {
+      active = false;
+      if (reconnectTimerId !== null) {
+        window.clearTimeout(reconnectTimerId);
+      }
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        ws.close();
+      }
     };
   }, [selectedInterval, selectedSymbol]);
 
@@ -484,9 +647,8 @@ function MarketsPageContent() {
     const interval = window.setInterval(() => {
       void (async () => {
         try {
-          const [overview, candleResponse, orderBookResponse, recentTradesResponse] = await Promise.all([
+          const [overview, orderBookResponse, recentTradesResponse] = await Promise.all([
             marketsService.getOverview(TRACKED_SYMBOLS),
-            marketsService.getCandles(selectedSymbol, selectedInterval, 160),
             marketsService.getOrderBook(selectedSymbol, 20),
             marketsService.getRecentTrades(selectedSymbol, 60),
           ]);
@@ -494,7 +656,6 @@ function MarketsPageContent() {
           setOverviewPairs(overview.pairs);
           setTopGainers(overview.topGainers);
           setTopLosers(overview.topLosers);
-          setCandles(candleResponse.candles);
           setOrderBook(orderBookResponse.orderBook);
           setRecentTrades(recentTradesResponse.trades);
           setRestFallback(true);
@@ -795,7 +956,7 @@ function MarketsPageContent() {
               <div className="grid gap-3 md:grid-cols-5">
                 <MetricCard
                   title="Last Price"
-                  value={selectedPair ? formatPrice(selectedPair.lastPrice) : "-"}
+                  value={liveChartPrice ? formatPrice(liveChartPrice) : selectedPair ? formatPrice(selectedPair.lastPrice) : "-"}
                   accent="text-white"
                 />
                 <MetricCard
@@ -828,8 +989,8 @@ function MarketsPageContent() {
                 candles={candles}
                 symbol={selectedSymbol}
                 interval={selectedInterval}
-                currentPrice={selectedPair?.lastPrice ?? null}
-                streamState={isSocketConnected ? "LIVE" : restFallback ? "RECONNECTING" : "DELAYED"}
+                currentPrice={liveChartPrice ?? selectedPair?.lastPrice ?? null}
+                streamState={chartStreamState}
               />
             </CardContent>
           </Card>

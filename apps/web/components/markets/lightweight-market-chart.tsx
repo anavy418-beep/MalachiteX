@@ -285,7 +285,7 @@ export function LightweightMarketChart({
 
       {parsedCandles.length === 0 ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-slate-400">
-          Waiting for candle stream...
+          Loading live chart...
         </div>
       ) : null}
     </div>
