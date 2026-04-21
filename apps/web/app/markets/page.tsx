@@ -54,9 +54,11 @@ const BINANCE_REST_BASE_URL = "https://api.binance.com";
 const BINANCE_STREAM_BASE_URL = "wss://stream.binance.com:9443/ws";
 const CHART_BOOTSTRAP_LIMIT = 100;
 const CHART_RECONNECT_DELAY_MS = 2_000;
-const MARKET_REFRESH_INTERVAL_MS = 10_000;
-const MARKET_RETRY_BASE_MS = 2_500;
-const MARKET_RETRY_MAX_MS = 30_000;
+const MARKET_REFRESH_INTERVAL_MS = 45_000;
+const MARKET_MIN_REFRESH_INTERVAL_MS = 30_000;
+const MARKET_RETRY_BASE_MS = 30_000;
+const MARKET_RETRY_MAX_MS = 180_000;
+const MANUAL_RETRY_COOLDOWN_MS = 8_000;
 
 type CoinGeckoMarketItem = {
   id: string;
@@ -72,7 +74,12 @@ type CoinGeckoMarketItem = {
 
 type LiveMarketApiResponse = {
   items: CoinGeckoMarketItem[];
-  fetchedAt: string;
+  isLive: boolean;
+  isStale: boolean;
+  source: "coingecko" | "cache";
+  lastUpdated: string;
+  message?: string;
+  nextRefreshInMs: number;
 };
 
 type LiveMarketCoin = {
@@ -384,6 +391,7 @@ function MarketsPageContent() {
   const [marketRefreshNonce, setMarketRefreshNonce] = useState(0);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [marketFeedMode, setMarketFeedMode] = useState<"LIVE" | "CACHED" | "OFFLINE">("OFFLINE");
+  const [isRetryCoolingDown, setIsRetryCoolingDown] = useState(false);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [restFallback, setRestFallback] = useState(false);
   const [chartStreamState, setChartStreamState] = useState<"LIVE" | "RECONNECTING" | "DELAYED">("DELAYED");
@@ -395,6 +403,7 @@ function MarketsPageContent() {
   const [error, setError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
   const hasMarketSnapshotRef = useRef(false);
+  const retryCooldownTimerRef = useRef<number | null>(null);
 
   const selectedPair = useMemo(
     () => [...overviewPairs, ...searchResults].find((pair) => pair.symbol === selectedSymbol) ?? null,
@@ -462,24 +471,51 @@ function MarketsPageContent() {
   }, [marketData.length]);
 
   useEffect(() => {
+    return () => {
+      if (retryCooldownTimerRef.current !== null) {
+        window.clearTimeout(retryCooldownTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     let active = true;
     let timerId: number | null = null;
     let consecutiveFailures = 0;
 
+    const scheduleNextFetch = (delayMs: number) => {
+      if (!active) return;
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+      timerId = window.setTimeout(() => {
+        void fetchMarketRows();
+      }, delayMs);
+    };
+
     async function fetchMarketRows() {
       let nextDelay = MARKET_REFRESH_INTERVAL_MS;
       try {
+        if (!hasMarketSnapshotRef.current) {
+          setMarketLoading(true);
+        }
+
         const response = await fetch(LIVE_MARKET_API_ENDPOINT, {
           cache: "no-store",
         });
+
+        const payload = (await response.json().catch(() => null)) as
+          | (Partial<LiveMarketApiResponse> & { error?: string })
+          | null;
+
         if (!response.ok) {
-          const payload = (await response.json().catch(() => null)) as { error?: string; details?: string } | null;
-          throw new Error(
-            payload?.details ?? payload?.error ?? `Live market request failed (${response.status})`,
-          );
+          throw new Error(payload?.error ?? `Live market request failed (${response.status})`);
         }
 
-        const payload = (await response.json()) as LiveMarketApiResponse;
+        if (!payload || !Array.isArray(payload.items)) {
+          throw new Error("Live market response is invalid.");
+        }
+
         if (!active) return;
 
         const mappedRows = payload.items
@@ -491,32 +527,51 @@ function MarketsPageContent() {
         }
 
         setMarketData(mappedRows);
-        setMarketError(null);
-        setMarketFeedMode("LIVE");
-        setLastUpdated(new Date(payload.fetchedAt));
-        consecutiveFailures = 0;
-        nextDelay = MARKET_REFRESH_INTERVAL_MS;
+        setMarketFeedMode(payload.isStale ? "CACHED" : "LIVE");
+
+        const lastUpdatedAt = payload.lastUpdated ? new Date(payload.lastUpdated) : new Date();
+        setLastUpdated(Number.isNaN(lastUpdatedAt.getTime()) ? new Date() : lastUpdatedAt);
+
+        const bannerMessage =
+          payload.message ??
+          (payload.isStale
+            ? "Using recent cached market data. Live refresh will resume automatically."
+            : null);
+        setMarketError(bannerMessage);
+
+        consecutiveFailures = payload.isStale ? Math.max(consecutiveFailures, 1) : 0;
+        const requestedRefreshMs =
+          typeof payload.nextRefreshInMs === "number" && Number.isFinite(payload.nextRefreshInMs)
+            ? payload.nextRefreshInMs
+            : MARKET_REFRESH_INTERVAL_MS;
+
+        nextDelay = Math.min(
+          MARKET_RETRY_MAX_MS,
+          Math.max(
+            MARKET_MIN_REFRESH_INTERVAL_MS,
+            requestedRefreshMs,
+          ),
+        );
       } catch (fetchError) {
         if (!active) return;
-        const message = fetchError instanceof Error ? fetchError.message : "Failed to load live market feed.";
         console.error("Live market fetch error:", fetchError);
         const hasSnapshot = hasMarketSnapshotRef.current;
+
         if (hasSnapshot) {
           setMarketFeedMode("CACHED");
-          setMarketError(`Using cached market snapshot. ${message}`);
+          setMarketError("Using recent cached market data. Live refresh will resume automatically.");
         } else {
           setMarketFeedMode("OFFLINE");
-          setMarketError(`Live market unavailable. ${message}`);
+          setMarketError("Live market temporarily unavailable. Retrying automatically.");
         }
+
         consecutiveFailures += 1;
         const multiplier = 2 ** Math.min(consecutiveFailures - 1, 4);
         nextDelay = Math.min(MARKET_RETRY_MAX_MS, MARKET_RETRY_BASE_MS * multiplier);
       } finally {
         if (active) {
           setMarketLoading(false);
-          timerId = window.setTimeout(() => {
-            void fetchMarketRows();
-          }, nextDelay);
+          scheduleNextFetch(nextDelay);
         }
       }
     }
@@ -1014,14 +1069,24 @@ function MarketsPageContent() {
                 size="sm"
                 variant="outline"
                 className="h-7 px-2.5 text-[11px]"
+                disabled={isRetryCoolingDown || marketLoading}
                 onClick={() => {
+                  if (isRetryCoolingDown) return;
+                  setIsRetryCoolingDown(true);
+                  if (retryCooldownTimerRef.current !== null) {
+                    window.clearTimeout(retryCooldownTimerRef.current);
+                  }
+                  retryCooldownTimerRef.current = window.setTimeout(() => {
+                    setIsRetryCoolingDown(false);
+                    retryCooldownTimerRef.current = null;
+                  }, MANUAL_RETRY_COOLDOWN_MS);
                   setMarketError(null);
                   setMarketLoading(true);
                   setMarketFeedMode(hasMarketSnapshotRef.current ? "CACHED" : "OFFLINE");
                   setMarketRefreshNonce((current) => current + 1);
                 }}
               >
-                Retry
+                {isRetryCoolingDown ? "Please wait..." : "Retry"}
               </Button>
             </div>
           ) : null}
