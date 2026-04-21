@@ -129,6 +129,20 @@ export class TradesService {
             paymentDetails: true,
           } as any,
         },
+        buyer: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
+        seller: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
       },
       orderBy: { createdAt: "desc" },
       take: 100,

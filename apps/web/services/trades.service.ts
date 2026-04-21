@@ -46,6 +46,16 @@ export interface TradeDispute {
 export interface TradeRecord {
   id: string;
   offerId: string;
+  buyer?: {
+    id: string;
+    username: string;
+    email: string;
+  };
+  seller?: {
+    id: string;
+    username: string;
+    email: string;
+  };
   offer?: {
     id: string;
     asset: string;
