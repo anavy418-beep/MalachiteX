@@ -71,51 +71,48 @@ const MOCK_MARKET_DATA_SEED: Array<Omit<MockMarketCoin, "icon">> = [
   { name: "Algorand", symbol: "ALGO", price: 0.2, change24h: -0.22, marketCapBillions: 1.6, volume24hBillions: 0.09, category: "Layer 1", trend: [51, 50, 49, 48, 48, 47, 46] },
 ];
 
-const AVAILABLE_COIN_ICONS = new Set([
-  "aave",
-  "ada",
-  "algo",
-  "apt",
-  "arb",
-  "atom",
-  "avax",
-  "bch",
-  "bnb",
-  "btc",
-  "doge",
-  "dot",
-  "etc",
-  "eth",
-  "fil",
-  "hbar",
-  "icp",
-  "inj",
-  "kas",
-  "link",
-  "ltc",
-  "near",
-  "op",
-  "pepe",
-  "pol",
-  "rndr",
-  "shib",
-  "sol",
-  "sui",
-  "ton",
-  "trx",
-  "uni",
-  "usdc",
-  "usdt",
-  "xlm",
-  "xrp",
-]);
+const COINGECKO_ICON_BY_SYMBOL: Record<string, string> = {
+  aave: "https://coin-images.coingecko.com/coins/images/12645/large/aave-token-round.png?1720472354",
+  ada: "https://coin-images.coingecko.com/coins/images/975/large/cardano.png?1696502090",
+  algo: "https://coin-images.coingecko.com/coins/images/4380/large/download.png?1696504978",
+  apt: "https://coin-images.coingecko.com/coins/images/26455/large/Aptos-Network-Symbol-Black-RGB-1x.png?1761789140",
+  arb: "https://coin-images.coingecko.com/coins/images/16547/large/arb.jpg?1721358242",
+  atom: "https://coin-images.coingecko.com/coins/images/1481/large/cosmos_hub.png?1696502525",
+  avax: "https://coin-images.coingecko.com/coins/images/12559/large/Avalanche_Circle_RedWhite_Trans.png?1696512369",
+  bch: "https://coin-images.coingecko.com/coins/images/780/large/bitcoin-cash-circle.png?1696501932",
+  bnb: "https://coin-images.coingecko.com/coins/images/825/large/bnb-icon2_2x.png?1696501970",
+  btc: "https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png?1696501400",
+  doge: "https://coin-images.coingecko.com/coins/images/5/large/dogecoin.png?1696501409",
+  dot: "https://coin-images.coingecko.com/coins/images/12171/large/polkadot.jpg?1766533446",
+  etc: "https://coin-images.coingecko.com/coins/images/453/large/ethereum-classic-logo.png?1696501717",
+  eth: "https://coin-images.coingecko.com/coins/images/279/large/ethereum.png?1696501628",
+  fil: "https://coin-images.coingecko.com/coins/images/12817/large/filecoin.png?1696512609",
+  hbar: "https://coin-images.coingecko.com/coins/images/3688/large/hbar.png?1696504364",
+  icp: "https://coin-images.coingecko.com/coins/images/14495/large/Internet_Computer_logo.png?1696514180",
+  inj: "https://coin-images.coingecko.com/coins/images/12882/large/Other_200x200.png?1738782212",
+  kas: "https://coin-images.coingecko.com/coins/images/25751/large/kaspa-icon-exchanges.png?1696524837",
+  link: "https://coin-images.coingecko.com/coins/images/877/large/Chainlink_Logo_500.png?1760023405",
+  ltc: "https://coin-images.coingecko.com/coins/images/2/large/litecoin.png?1696501400",
+  near: "https://coin-images.coingecko.com/coins/images/10365/large/near.jpg?1696510367",
+  op: "https://coin-images.coingecko.com/coins/images/25244/large/Token.png?1774456081",
+  pepe: "https://coin-images.coingecko.com/coins/images/29850/large/pepe-token.jpeg?1696528776",
+  pol: "https://coin-images.coingecko.com/coins/images/32440/large/pol.png?1759114181",
+  rndr: "https://coin-images.coingecko.com/coins/images/11636/large/rndr.png?1696511529",
+  shib: "https://coin-images.coingecko.com/coins/images/11939/large/shiba.png?1696511800",
+  sol: "https://coin-images.coingecko.com/coins/images/4128/large/solana.png?1718769756",
+  sui: "https://coin-images.coingecko.com/coins/images/26375/large/sui-ocean-square.png?1727791290",
+  ton: "https://coin-images.coingecko.com/coins/images/17980/large/photo_2024-09-10_17.09.00.jpeg",
+  trx: "https://coin-images.coingecko.com/coins/images/1094/large/photo_2026-04-13_09-59-16.png?1776048311",
+  uni: "https://coin-images.coingecko.com/coins/images/12504/large/uniswap-logo.png?1720676669",
+  usdc: "https://coin-images.coingecko.com/coins/images/6319/large/USDC.png?1769615602",
+  usdt: "https://coin-images.coingecko.com/coins/images/325/large/Tether.png?1696501661",
+  xlm: "https://coin-images.coingecko.com/coins/images/100/large/fmpFRHHQ_400x400.jpg?1735231350",
+  xrp: "https://coin-images.coingecko.com/coins/images/44/large/xrp-symbol-white-128.png?1696501442",
+};
 
 const buildCoinIconPath = (symbol: string) => {
   const normalized = symbol.toLowerCase();
-  if (AVAILABLE_COIN_ICONS.has(normalized)) {
-    return `/coins/${normalized}.svg`;
-  }
-  return "/icons/coin-fallback.svg";
+  return COINGECKO_ICON_BY_SYMBOL[normalized] ?? "/icons/coin-fallback.png";
 };
 
 export const MOCK_MARKET_DATA: MockMarketCoin[] = MOCK_MARKET_DATA_SEED.map((coin) => ({
