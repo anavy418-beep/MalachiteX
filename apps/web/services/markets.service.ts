@@ -256,6 +256,27 @@ function buildFallbackOrderBookSnapshot(symbol: string): MarketOrderBookSnapshot
   };
 }
 
+async function fetchLocalOrderBook(params: URLSearchParams) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const localResponse = await fetch(`/api/markets/order-book?${params.toString()}`, {
+    cache: "no-store",
+  });
+
+  if (!localResponse.ok) {
+    return null;
+  }
+
+  const localPayload = (await localResponse.json()) as Partial<MarketOrderBookResponse>;
+  if (!localPayload || !localPayload.orderBook) {
+    return null;
+  }
+
+  return localPayload as MarketOrderBookResponse;
+}
+
 export const marketsService = {
   getOverview(symbols: string[]) {
     const params = new URLSearchParams();
@@ -326,28 +347,37 @@ export const marketsService = {
       limit: String(normalizedLimit),
     });
 
+    let localRouteError: unknown = null;
+    if (typeof window !== "undefined") {
+      try {
+        const localPayload = await fetchLocalOrderBook(params);
+        if (localPayload) {
+          return localPayload;
+        }
+      } catch (error) {
+        localRouteError = error;
+      }
+    }
+
     try {
       return await apiRequest<MarketOrderBookResponse>(`/markets/order-book?${params.toString()}`);
     } catch (primaryError) {
-      if (typeof window !== "undefined") {
+      if (typeof window !== "undefined" && localRouteError === null) {
         try {
-          const localResponse = await fetch(`/api/markets/order-book?${params.toString()}`, {
-            cache: "no-store",
-          });
-
-          if (localResponse.ok) {
-            const localPayload = (await localResponse.json()) as MarketOrderBookResponse;
-            if (localPayload && localPayload.orderBook) {
-              return localPayload;
-            }
+          const localPayload = await fetchLocalOrderBook(params);
+          if (localPayload) {
+            return localPayload;
           }
-        } catch {
-          // Ignore local fallback fetch failures and return a safe empty snapshot.
+        } catch (error) {
+          localRouteError = error;
         }
       }
 
       if (process.env.NODE_ENV !== "production") {
         console.warn("getOrderBook fallback activated after API error:", primaryError);
+        if (localRouteError) {
+          console.warn("getOrderBook local route request error:", localRouteError);
+        }
       }
 
       return {
