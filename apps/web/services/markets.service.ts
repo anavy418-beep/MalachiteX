@@ -10,6 +10,8 @@ if (!API_BASE_URL && process.env.NODE_ENV === "production") {
 
 const RESOLVED_API_BASE_URL = API_BASE_URL || "http://localhost:4000/api";
 const KNOWN_QUOTES = ["USDT", "USDC", "BTC", "ETH", "BNB", "TRY", "EUR", "GBP"] as const;
+const DEFAULT_ORDER_BOOK_LIMIT = 20;
+const ALLOWED_ORDER_BOOK_LIMITS = [5, 10, 20, 50, 100, 500, 1000] as const;
 const FALLBACK_PAIR_SYMBOLS = [
   "BTCUSDT",
   "ETHUSDT",
@@ -224,6 +226,36 @@ function filterFallbackPairs(search: string, limit: number) {
   return filtered.slice(0, Math.max(1, limit));
 }
 
+function normalizeOrderBookSymbol(symbol: string) {
+  return String(symbol ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+function normalizeOrderBookLimit(limit: number) {
+  if (!Number.isFinite(limit)) return DEFAULT_ORDER_BOOK_LIMIT;
+  const rounded = Math.max(1, Math.floor(limit));
+  return (
+    ALLOWED_ORDER_BOOK_LIMITS.find((allowed) => allowed >= rounded) ??
+    ALLOWED_ORDER_BOOK_LIMITS[ALLOWED_ORDER_BOOK_LIMITS.length - 1]
+  );
+}
+
+function buildFallbackOrderBookSnapshot(symbol: string): MarketOrderBookSnapshot {
+  return {
+    symbol,
+    bids: [],
+    asks: [],
+    bestBid: null,
+    bestAsk: null,
+    spread: null,
+    updatedAt: Date.now(),
+    source: "binance",
+    streaming: false,
+  };
+}
+
 export const marketsService = {
   getOverview(symbols: string[]) {
     const params = new URLSearchParams();
@@ -282,13 +314,50 @@ export const marketsService = {
     return apiRequest<MarketCandlesResponse>(`/markets/candles?${params.toString()}`);
   },
 
-  getOrderBook(symbol: string, limit = 20) {
+  async getOrderBook(symbol: string, limit = 20) {
+    const normalizedSymbolCandidate = normalizeOrderBookSymbol(symbol);
+    const normalizedSymbol =
+      normalizedSymbolCandidate.length >= 6 && normalizedSymbolCandidate.length <= 20
+        ? normalizedSymbolCandidate
+        : "BTCUSDT";
+    const normalizedLimit = normalizeOrderBookLimit(limit);
     const params = new URLSearchParams({
-      symbol,
-      limit: String(limit),
+      symbol: normalizedSymbol,
+      limit: String(normalizedLimit),
     });
 
-    return apiRequest<MarketOrderBookResponse>(`/markets/order-book?${params.toString()}`);
+    try {
+      return await apiRequest<MarketOrderBookResponse>(`/markets/order-book?${params.toString()}`);
+    } catch (primaryError) {
+      if (typeof window !== "undefined") {
+        try {
+          const localResponse = await fetch(`/api/markets/order-book?${params.toString()}`, {
+            cache: "no-store",
+          });
+
+          if (localResponse.ok) {
+            const localPayload = (await localResponse.json()) as MarketOrderBookResponse;
+            if (localPayload && localPayload.orderBook) {
+              return localPayload;
+            }
+          }
+        } catch {
+          // Ignore local fallback fetch failures and return a safe empty snapshot.
+        }
+      }
+
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("getOrderBook fallback activated after API error:", primaryError);
+      }
+
+      return {
+        symbol: normalizedSymbol,
+        orderBook: buildFallbackOrderBookSnapshot(normalizedSymbol),
+        source: "binance",
+        updatedAt: Date.now(),
+        streaming: false,
+      };
+    }
   },
 
   getRecentTrades(symbol: string, limit = 40) {
