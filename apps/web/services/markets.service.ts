@@ -9,6 +9,7 @@ if (!API_BASE_URL && process.env.NODE_ENV === "production") {
 }
 
 const RESOLVED_API_BASE_URL = API_BASE_URL || "http://localhost:4000/api";
+const API_SOCKET_URL = process.env.NEXT_PUBLIC_API_SOCKET_URL ?? "";
 const KNOWN_QUOTES = ["USDT", "USDC", "BTC", "ETH", "BNB", "TRY", "EUR", "GBP"] as const;
 const DEFAULT_ORDER_BOOK_LIMIT = 20;
 const ALLOWED_ORDER_BOOK_LIMITS = [5, 10, 20, 50, 100, 500, 1000] as const;
@@ -256,6 +257,21 @@ function buildFallbackOrderBookSnapshot(symbol: string): MarketOrderBookSnapshot
   };
 }
 
+function trimTrailingSlash(value: string) {
+  return value.replace(/\/+$/, "");
+}
+
+function normalizeApiBase(value: string) {
+  const candidate = String(value ?? "").trim();
+  if (!candidate) return "";
+  return trimTrailingSlash(candidate);
+}
+
+function removeApiSuffix(value: string) {
+  const normalized = normalizeApiBase(value);
+  return normalized.endsWith("/api") ? normalized.slice(0, -4) : normalized;
+}
+
 type LocalOrderBookNumericLevel = {
   price: number;
   quantity: number;
@@ -382,6 +398,56 @@ async function fetchLocalOrderBook(params: URLSearchParams) {
   return coerceLocalOrderBookPayload(localPayload);
 }
 
+async function fetchOrderBookFromCandidates(params: URLSearchParams) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
+  const candidates = new Set<string>();
+
+  candidates.add(`/api/markets/order-book${suffix}`);
+  candidates.add(`/markets/order-book${suffix}`);
+
+  const resolvedApiBase = normalizeApiBase(RESOLVED_API_BASE_URL);
+  if (resolvedApiBase) {
+    candidates.add(`${resolvedApiBase}/markets/order-book${suffix}`);
+    const stripped = removeApiSuffix(resolvedApiBase);
+    if (stripped && stripped !== resolvedApiBase) {
+      candidates.add(`${stripped}/markets/order-book${suffix}`);
+    }
+  }
+
+  const socketBase = normalizeApiBase(API_SOCKET_URL);
+  if (socketBase) {
+    candidates.add(`${socketBase}/api/markets/order-book${suffix}`);
+    candidates.add(`${socketBase}/markets/order-book${suffix}`);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const response = await fetch(candidate, {
+        cache: "no-store",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        continue;
+      }
+
+      const payload = await response.json().catch(() => null);
+      const normalized = coerceLocalOrderBookPayload(payload);
+      if (normalized) {
+        return normalized;
+      }
+    } catch {
+      // Continue through candidates until one succeeds.
+    }
+  }
+
+  return null;
+}
+
 export const marketsService = {
   getOverview(symbols: string[]) {
     const params = new URLSearchParams();
@@ -455,6 +521,10 @@ export const marketsService = {
     let localRouteError: unknown = null;
     if (typeof window !== "undefined") {
       try {
+        const candidatePayload = await fetchOrderBookFromCandidates(params);
+        if (candidatePayload) {
+          return candidatePayload;
+        }
         const localPayload = await fetchLocalOrderBook(params);
         if (localPayload) {
           return localPayload;
@@ -469,6 +539,10 @@ export const marketsService = {
     } catch (primaryError) {
       if (typeof window !== "undefined" && localRouteError === null) {
         try {
+          const candidatePayload = await fetchOrderBookFromCandidates(params);
+          if (candidatePayload) {
+            return candidatePayload;
+          }
           const localPayload = await fetchLocalOrderBook(params);
           if (localPayload) {
             return localPayload;
