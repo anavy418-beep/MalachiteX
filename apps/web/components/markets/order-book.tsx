@@ -42,6 +42,25 @@ export function OrderBook({
 }) {
   const asks = orderBook?.asks.slice(0, rows).reverse() ?? [];
   const bids = orderBook?.bids.slice(0, rows) ?? [];
+  const bestBid = orderBook?.bestBid ?? (bids[0]?.price ?? null);
+  const bestAsk = orderBook?.bestAsk ?? (asks[asks.length - 1]?.price ?? null);
+  const computedSpread = useMemo(() => {
+    if (orderBook?.spread) {
+      return orderBook.spread;
+    }
+
+    if (!bestBid || !bestAsk) {
+      return null;
+    }
+
+    const bid = Number.parseFloat(bestBid);
+    const ask = Number.parseFloat(bestAsk);
+    if (!Number.isFinite(bid) || !Number.isFinite(ask) || ask < bid) {
+      return null;
+    }
+
+    return (ask - bid).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
+  }, [bestAsk, bestBid, orderBook?.spread]);
 
   const maxCumulative = useMemo(() => {
     const cumulativeValues = [...asks, ...bids].map((entry) => toNumber(entry.cumulativeQuantity));
@@ -56,7 +75,7 @@ export function OrderBook({
           <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">{symbol.replace("USDT", "/USDT")}</p>
         </div>
         <p className="text-[11px] text-slate-500">
-          Spread {orderBook?.spread ? formatPrice(orderBook.spread) : "-"}
+          Spread {computedSpread ? formatPrice(computedSpread) : "-"}
         </p>
       </div>
 
@@ -68,7 +87,7 @@ export function OrderBook({
 
       <div className="space-y-1 px-2 pb-2">
         {asks.length === 0 ? (
-          <div className="px-2 py-8 text-center text-sm text-slate-500">No ask liquidity data.</div>
+          <div className="px-2 py-8 text-center text-sm text-slate-500">Loading order book...</div>
         ) : (
           asks.map((level) => {
             const depthWidth =
@@ -98,15 +117,18 @@ export function OrderBook({
       <div className="mx-4 rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-center text-sm">
         <span className="text-slate-400">Best Bid / Ask: </span>
         <span className="font-medium text-emerald-300">
-          {orderBook?.bestBid ? formatPrice(orderBook.bestBid) : "-"}
+          {bestBid ? formatPrice(bestBid) : "-"}
         </span>
         <span className="mx-1 text-slate-500">/</span>
-        <span className="font-medium text-red-300">{orderBook?.bestAsk ? formatPrice(orderBook.bestAsk) : "-"}</span>
+        <span className="font-medium text-red-300">{bestAsk ? formatPrice(bestAsk) : "-"}</span>
+        <span className="mx-2 text-slate-500">•</span>
+        <span className="text-slate-400">Spread </span>
+        <span className="font-medium text-slate-200">{computedSpread ? formatPrice(computedSpread) : "-"}</span>
       </div>
 
       <div className="space-y-1 px-2 py-2">
         {bids.length === 0 ? (
-          <div className="px-2 py-8 text-center text-sm text-slate-500">No bid liquidity data.</div>
+          <div className="px-2 py-8 text-center text-sm text-slate-500">Loading order book...</div>
         ) : (
           bids.map((level) => {
             const depthWidth =
@@ -135,4 +157,3 @@ export function OrderBook({
     </div>
   );
 }
-

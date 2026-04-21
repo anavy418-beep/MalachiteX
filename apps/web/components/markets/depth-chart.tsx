@@ -60,7 +60,7 @@ export function DepthChart({
 
       {points.maxDepth <= 0 ? (
         <div className="rounded-lg border border-dashed border-zinc-700 px-3 py-5 text-center text-xs text-slate-500">
-          No depth data yet.
+          Loading order book depth...
         </div>
       ) : (
         <div className="grid gap-2 sm:grid-cols-2">
@@ -93,4 +93,3 @@ export function DepthChart({
     </div>
   );
 }
-

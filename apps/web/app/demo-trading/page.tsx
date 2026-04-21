@@ -50,6 +50,8 @@ const DEFAULT_FALLBACK_PRICE = "75000";
 const MARKET_INIT_TIMEOUT_MS = 6_000;
 const DEFAULT_QUOTE_ASSET = "USDT";
 const DEFAULT_BASE_ASSET = "BTC";
+const BINANCE_DEPTH_LIMIT = 20;
+const BINANCE_DEPTH_RECONNECT_MS = 2_000;
 
 function formatSigned(value: string) {
   const parsed = Number.parseFloat(value);
@@ -329,6 +331,104 @@ function buildFallbackPaperAccountSummary(): PaperTradingAccountSummary {
   };
 }
 
+function toBinanceSymbol(symbol: string) {
+  return symbol.replace(/\//g, "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+}
+
+function toDepthEntries(input: unknown) {
+  if (!Array.isArray(input)) return [] as Array<[string, string]>;
+
+  return input
+    .map((entry) => {
+      if (!Array.isArray(entry) || entry.length < 2) return null;
+      const price = String(entry[0] ?? "").trim();
+      const quantity = String(entry[1] ?? "").trim();
+      if (!price || !quantity) return null;
+      const priceValue = Number.parseFloat(price);
+      const quantityValue = Number.parseFloat(quantity);
+      if (!Number.isFinite(priceValue) || !Number.isFinite(quantityValue) || priceValue <= 0 || quantityValue <= 0) {
+        return null;
+      }
+      return [price, quantity] as [string, string];
+    })
+    .filter((entry): entry is [string, string] => entry !== null);
+}
+
+function buildDepthLevels(
+  side: "BID" | "ASK",
+  levels: Array<[string, string]>,
+) {
+  const sorted = [...levels].sort((left, right) => {
+    const leftPrice = Number.parseFloat(left[0]);
+    const rightPrice = Number.parseFloat(right[0]);
+    return side === "BID" ? rightPrice - leftPrice : leftPrice - rightPrice;
+  });
+
+  let cumulative = 0;
+  return sorted.map(([price, quantity]) => {
+    cumulative += Number.parseFloat(quantity);
+    return {
+      price,
+      quantity,
+      cumulativeQuantity: cumulative.toFixed(8),
+      side,
+    } as const;
+  });
+}
+
+function buildDepthSnapshot(
+  symbol: string,
+  payload: { bids?: unknown; asks?: unknown },
+  streaming: boolean,
+): MarketOrderBookSnapshot {
+  const bids = buildDepthLevels("BID", toDepthEntries(payload.bids));
+  const asks = buildDepthLevels("ASK", toDepthEntries(payload.asks));
+  const bestBid = bids[0]?.price ?? null;
+  const bestAsk = asks[0]?.price ?? null;
+  const spread =
+    bestBid && bestAsk
+      ? (
+          Number.parseFloat(bestAsk) - Number.parseFloat(bestBid)
+        ).toFixed(8).replace(/0+$/, "").replace(/\.$/, "")
+      : null;
+
+  return {
+    symbol,
+    bids,
+    asks,
+    bestBid,
+    bestAsk,
+    spread: spread && spread.length > 0 ? spread : null,
+    updatedAt: Date.now(),
+    source: "binance",
+    streaming,
+  };
+}
+
+function hasDepthLevels(snapshot: MarketOrderBookSnapshot | null | undefined) {
+  if (!snapshot) return false;
+  return snapshot.bids.length > 0 || snapshot.asks.length > 0;
+}
+
+function mergeOrderBookSnapshots(
+  current: MarketOrderBookSnapshot | null,
+  incoming: MarketOrderBookSnapshot,
+) {
+  if (hasDepthLevels(incoming)) {
+    return incoming;
+  }
+
+  if (current?.symbol === incoming.symbol && hasDepthLevels(current)) {
+    return {
+      ...current,
+      streaming: incoming.streaming,
+      updatedAt: incoming.updatedAt,
+    };
+  }
+
+  return incoming;
+}
+
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -399,7 +499,9 @@ function DemoTradingPageContent() {
   const [isCreatingAccount, setIsCreatingAccount] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
+  const [isDepthSocketConnected, setIsDepthSocketConnected] = useState(false);
   const [restFallback, setRestFallback] = useState(false);
+  const [depthFeedError, setDepthFeedError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [isPageLoading, setIsPageLoading] = useState(true);
   const [accountMissing, setAccountMissing] = useState(false);
@@ -687,7 +789,7 @@ function DemoTradingPageContent() {
             ? candleResponse.candles
             : buildFallbackCandles(selectedSymbol, selectedInterval),
         );
-        setOrderBook(orderBookResponse.orderBook);
+        setOrderBook((current) => mergeOrderBookSnapshots(current, orderBookResponse.orderBook));
         setRecentTrades(recentTradesResponse.trades);
         setRestFallback(!overview.streaming);
       } catch (err) {
@@ -713,6 +815,123 @@ function DemoTradingPageContent() {
       cancelled = true;
     };
   }, [deferredSearch, selectedInterval, selectedSymbol]);
+
+  useEffect(() => {
+    const exchangeSymbol = toBinanceSymbol(selectedSymbol);
+    if (!exchangeSymbol) return;
+
+    let active = true;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    setOrderBook((current) =>
+      current?.symbol === exchangeSymbol
+        ? current
+        : buildDepthSnapshot(exchangeSymbol, { bids: [], asks: [] }, false),
+    );
+
+    const applyDepthSnapshot = (snapshot: MarketOrderBookSnapshot) => {
+      setOrderBook((current) => mergeOrderBookSnapshots(current, snapshot));
+    };
+
+    const markDepthStreamState = (connected: boolean) => {
+      setIsDepthSocketConnected(connected);
+      setOrderBook((current) =>
+        current?.symbol === exchangeSymbol
+          ? {
+              ...current,
+              streaming: connected,
+              updatedAt: Date.now(),
+            }
+          : current,
+      );
+    };
+
+    const fetchDepthSnapshot = async () => {
+      const response = await fetch(
+        `https://api.binance.com/api/v3/depth?symbol=${exchangeSymbol}&limit=${BINANCE_DEPTH_LIMIT}`,
+        {
+          cache: "no-store",
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Depth snapshot request failed (${response.status})`);
+      }
+
+      const payload = (await response.json()) as { bids?: unknown; asks?: unknown };
+      if (!active) return;
+
+      applyDepthSnapshot(buildDepthSnapshot(exchangeSymbol, payload, false));
+      setDepthFeedError(null);
+    };
+
+    const connectDepthSocket = () => {
+      if (!active) return;
+
+      socket = new WebSocket(`wss://stream.binance.com:9443/ws/${exchangeSymbol.toLowerCase()}@depth20@100ms`);
+
+      socket.onopen = () => {
+        if (!active) return;
+        setDepthFeedError(null);
+        markDepthStreamState(true);
+      };
+
+      socket.onmessage = (event) => {
+        if (!active) return;
+
+        try {
+          const payload = JSON.parse(event.data) as { bids?: unknown; asks?: unknown };
+          applyDepthSnapshot(buildDepthSnapshot(exchangeSymbol, payload, true));
+          setDepthFeedError(null);
+          setIsDepthSocketConnected(true);
+        } catch (error) {
+          console.error("Failed to parse Binance depth message:", error);
+        }
+      };
+
+      socket.onerror = (event) => {
+        if (!active) return;
+        console.error("Binance depth websocket error:", event);
+        setDepthFeedError("Depth stream error. Reconnecting...");
+      };
+
+      socket.onclose = () => {
+        if (!active) return;
+        markDepthStreamState(false);
+        reconnectTimer = setTimeout(() => {
+          void bootstrapDepthFeed();
+        }, BINANCE_DEPTH_RECONNECT_MS);
+      };
+    };
+
+    const bootstrapDepthFeed = async () => {
+      try {
+        await fetchDepthSnapshot();
+      } catch (error) {
+        if (!active) return;
+        console.error("Failed to fetch Binance depth snapshot:", error);
+        setDepthFeedError((error as Error).message);
+      }
+
+      if (active) {
+        connectDepthSocket();
+      }
+    };
+
+    void bootstrapDepthFeed();
+
+    return () => {
+      active = false;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+      if (socket) {
+        socket.close();
+      }
+      setIsDepthSocketConnected(false);
+    };
+  }, [selectedSymbol]);
 
   useEffect(() => {
     const connection = marketsService.connectSocket({
@@ -752,12 +971,12 @@ function DemoTradingPageContent() {
       },
       onOrderBookBootstrap(payload) {
         if (payload.symbol === selectedSymbol) {
-          setOrderBook(payload.orderBook);
+          setOrderBook((current) => mergeOrderBookSnapshots(current, payload.orderBook));
         }
       },
       onOrderBook(nextOrderBook) {
         if (nextOrderBook.symbol === selectedSymbol) {
-          setOrderBook(nextOrderBook);
+          setOrderBook((current) => mergeOrderBookSnapshots(current, nextOrderBook));
         }
         const markPrice = deriveMarkPrice(nextOrderBook, null);
         if (!markPrice) return;
@@ -809,7 +1028,7 @@ function DemoTradingPageContent() {
               ? candleResponse.candles
               : buildFallbackCandles(selectedSymbol, selectedInterval),
           );
-          setOrderBook(orderBookResponse.orderBook);
+          setOrderBook((current) => mergeOrderBookSnapshots(current, orderBookResponse.orderBook));
           setRecentTrades(recentTradesResponse.trades);
           setRestFallback(true);
         } catch {
@@ -1139,6 +1358,21 @@ function DemoTradingPageContent() {
             </Card>
 
             <div className="space-y-4">
+              <div
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
+                  isDepthSocketConnected
+                    ? "border-emerald-700/40 bg-emerald-500/10 text-emerald-200"
+                    : "border-amber-700/40 bg-amber-500/10 text-amber-200"
+                }`}
+              >
+                {isDepthSocketConnected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+                {isDepthSocketConnected ? "Order Book Live" : "Order Book Reconnecting"}
+                {depthFeedError ? (
+                  <span className="text-[11px] text-amber-200/90">
+                    • {depthFeedError}
+                  </span>
+                ) : null}
+              </div>
               <OrderBook symbol={selectedSymbol} orderBook={orderBook} />
               <DepthChart symbol={selectedSymbol} orderBook={orderBook} />
               <RecentTradesFeed symbol={selectedSymbol} trades={recentTrades} />
