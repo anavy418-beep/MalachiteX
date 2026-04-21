@@ -104,6 +104,11 @@ function safeBigInt(value: string | bigint | number | null | undefined) {
 
 export default function TradesPage() {
   const { user, isAuthenticated, isBootstrapping } = useAuth();
+  const hasSessionMarker = tokenStore.hasSessionMarker();
+  const isSessionResolved = !isBootstrapping;
+  const hasAuthenticatedUser = isAuthenticated && Boolean(user);
+  const shouldShowGuestScreen = isSessionResolved && !hasAuthenticatedUser && !hasSessionMarker;
+  const shouldHoldDashboardShell = !shouldShowGuestScreen && !hasAuthenticatedUser;
 
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [wallet, setWallet] = useState<WalletSummary | null>(null);
@@ -122,7 +127,7 @@ export default function TradesPage() {
       return;
     }
 
-    if (!isAuthenticated || !user) {
+    if (!hasAuthenticatedUser) {
       setTrades([]);
       setWallet(null);
       setError(null);
@@ -174,7 +179,7 @@ export default function TradesPage() {
     return () => {
       active = false;
     };
-  }, [isAuthenticated, isBootstrapping, refreshNonce, user?.id]);
+  }, [hasAuthenticatedUser, isBootstrapping, refreshNonce]);
 
   const pairOptions = useMemo(() => {
     const pairs = new Set<string>(QUICK_PAIRS);
@@ -283,11 +288,11 @@ export default function TradesPage() {
     setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
 
-  if (isBootstrapping) {
+  if (isBootstrapping || shouldHoldDashboardShell) {
     return <LoadingState label="Loading trade dashboard" />;
   }
 
-  if (!isAuthenticated || !user) {
+  if (shouldShowGuestScreen) {
     return (
       <section className="space-y-6">
         <header className="space-y-2">
@@ -311,6 +316,10 @@ export default function TradesPage() {
         </Card>
       </section>
     );
+  }
+
+  if (!user) {
+    return <LoadingState label="Loading trade dashboard" />;
   }
 
   return (
