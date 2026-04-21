@@ -46,6 +46,10 @@ const SCALE_FACTOR = 100000000n;
 const LEVERAGE_OPTIONS = ["1", "2", "5", "10"] as const;
 const TRACKED_SYMBOLS = [...DEFAULT_SUPPORTED_MARKET_SYMBOLS];
 const ACCOUNT_INIT_TIMEOUT_MS = 8_000;
+const DEFAULT_FALLBACK_PRICE = "75000";
+const MARKET_INIT_TIMEOUT_MS = 6_000;
+const DEFAULT_QUOTE_ASSET = "USDT";
+const DEFAULT_BASE_ASSET = "BTC";
 
 function formatSigned(value: string) {
   const parsed = Number.parseFloat(value);
@@ -208,6 +212,123 @@ function reasonLabel(reason: string | null) {
   return reason.replace(/_/g, " ");
 }
 
+function parseSymbolParts(symbol: string) {
+  const normalized = symbol.toUpperCase();
+  if (normalized.endsWith(DEFAULT_QUOTE_ASSET) && normalized.length > DEFAULT_QUOTE_ASSET.length) {
+    return {
+      baseAsset: normalized.slice(0, -DEFAULT_QUOTE_ASSET.length),
+      quoteAsset: DEFAULT_QUOTE_ASSET,
+    };
+  }
+
+  return {
+    baseAsset: DEFAULT_BASE_ASSET,
+    quoteAsset: DEFAULT_QUOTE_ASSET,
+  };
+}
+
+function buildFallbackPairSnapshot(symbol: string): MarketTickerSnapshot {
+  const now = Date.now();
+  const { baseAsset, quoteAsset } = parseSymbolParts(symbol);
+
+  return {
+    symbol,
+    baseAsset,
+    quoteAsset,
+    displaySymbol: `${baseAsset}/${quoteAsset}`,
+    lastPrice: DEFAULT_FALLBACK_PRICE,
+    openPrice: "74650",
+    highPrice: "75880",
+    lowPrice: "74210",
+    priceChange: "350",
+    priceChangePercent: "0.47",
+    volume: "0",
+    quoteVolume: "0",
+    bidPrice: "74990",
+    askPrice: "75010",
+    tradeCount: 0,
+    openTime: now - 86_400_000,
+    closeTime: now,
+    updatedAt: now,
+    source: "binance",
+    streaming: false,
+  };
+}
+
+function intervalToMs(interval: (typeof MARKET_TIMEFRAMES)[number]) {
+  if (interval === "1m") return 60_000;
+  if (interval === "5m") return 300_000;
+  if (interval === "15m") return 900_000;
+  if (interval === "1h") return 3_600_000;
+  if (interval === "4h") return 14_400_000;
+  return 86_400_000;
+}
+
+function buildFallbackCandles(
+  symbol: string,
+  interval: (typeof MARKET_TIMEFRAMES)[number],
+  basePrice = 75_000,
+  length = 80,
+): MarketCandle[] {
+  const stepMs = intervalToMs(interval);
+  const now = Date.now();
+  const start = now - stepMs * length;
+
+  return Array.from({ length }, (_, index) => {
+    const openTime = start + index * stepMs;
+    const closeTime = openTime + stepMs - 1;
+    const wave = Math.sin(index / 5) * 220 + Math.cos(index / 9) * 110;
+    const open = basePrice + wave;
+    const close = open + Math.sin(index / 3) * 80;
+    const high = Math.max(open, close) + 60;
+    const low = Math.min(open, close) - 60;
+
+    return {
+      symbol,
+      interval,
+      openTime,
+      closeTime,
+      open: open.toFixed(2),
+      high: high.toFixed(2),
+      low: low.toFixed(2),
+      close: close.toFixed(2),
+      volume: (10 + (index % 12) * 0.7).toFixed(4),
+      quoteVolume: ((10 + (index % 12) * 0.7) * close).toFixed(2),
+      tradeCount: 40 + (index % 20),
+      isClosed: true,
+      updatedAt: now,
+    };
+  });
+}
+
+function buildFallbackPaperAccountSummary(): PaperTradingAccountSummary {
+  const now = new Date().toISOString();
+
+  return {
+    account: {
+      id: "fallback-paper-account",
+      currency: DEFAULT_QUOTE_ASSET,
+      balance: "10000.00000000",
+      balanceMinor: "1000000000000",
+      usedMargin: "0.00000000",
+      usedMarginMinor: "0",
+      reservedOrderMargin: "0.00000000",
+      reservedOrderMarginMinor: "0",
+      realizedPnl: "0.00000000",
+      realizedPnlMinor: "0",
+      unrealizedPnl: "0.00000000",
+      unrealizedPnlMinor: "0",
+      equity: "10000.00000000",
+      equityMinor: "1000000000000",
+      createdAt: now,
+      updatedAt: now,
+    },
+    positions: [],
+    orders: [],
+    tradeHistory: [],
+  };
+}
+
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -242,6 +363,8 @@ function DemoTradingPageContent() {
     supportedSymbols: initialSupportedSymbols,
     fallbackSymbol: TRACKED_SYMBOLS[0],
   });
+  const bootSymbol = initialSelection.symbol;
+  const bootInterval = initialSelection.interval;
   const { isAuthenticated, isBootstrapping } = useAuth();
   const [selectedSymbol, setSelectedSymbol] = useState(() =>
     initialSelection.symbol,
@@ -249,12 +372,20 @@ function DemoTradingPageContent() {
   const [selectedInterval, setSelectedInterval] = useState<(typeof MARKET_TIMEFRAMES)[number]>(() =>
     initialSelection.interval,
   );
-  const [marketPair, setMarketPair] = useState<MarketTickerSnapshot | null>(null);
-  const [pairOptions, setPairOptions] = useState<MarketTickerSnapshot[]>([]);
-  const [candles, setCandles] = useState<MarketCandle[]>([]);
+  const [marketPair, setMarketPair] = useState<MarketTickerSnapshot | null>(() =>
+    buildFallbackPairSnapshot(initialSelection.symbol),
+  );
+  const [pairOptions, setPairOptions] = useState<MarketTickerSnapshot[]>(() =>
+    withSelectedPair([buildFallbackPairSnapshot(initialSelection.symbol)], initialSelection.symbol),
+  );
+  const [candles, setCandles] = useState<MarketCandle[]>(() =>
+    buildFallbackCandles(initialSelection.symbol, initialSelection.interval),
+  );
   const [orderBook, setOrderBook] = useState<MarketOrderBookSnapshot | null>(null);
   const [recentTrades, setRecentTrades] = useState<MarketRecentTrade[]>([]);
-  const [paperAccount, setPaperAccount] = useState<PaperTradingAccountSummary | null>(null);
+  const [paperAccount, setPaperAccount] = useState<PaperTradingAccountSummary | null>(() =>
+    buildFallbackPaperAccountSummary(),
+  );
   const [positionType, setPositionType] = useState<"LONG" | "SHORT">("LONG");
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET");
@@ -269,7 +400,8 @@ function DemoTradingPageContent() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [restFallback, setRestFallback] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [isPageLoading, setIsPageLoading] = useState(true);
   const [accountMissing, setAccountMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
@@ -385,12 +517,28 @@ function DemoTradingPageContent() {
     router.replace(targetSelectionPath, { scroll: false });
   }, [currentPathWithQuery, router, targetSelectionPath]);
 
+  useEffect(() => {
+    setMarketPair((current) => (current?.symbol === selectedSymbol ? current : buildFallbackPairSnapshot(selectedSymbol)));
+    setPairOptions((current) => {
+      if (current.some((pair) => pair.symbol === selectedSymbol)) {
+        return withSelectedPair(current, selectedSymbol);
+      }
+      return withSelectedPair([...current, buildFallbackPairSnapshot(selectedSymbol)], selectedSymbol);
+    });
+    setCandles((current) => {
+      const hasCurrentPairCandles = current.some(
+        (candle) => candle.symbol === selectedSymbol && candle.interval === selectedInterval,
+      );
+      return hasCurrentPairCandles ? current : buildFallbackCandles(selectedSymbol, selectedInterval);
+    });
+  }, [selectedInterval, selectedSymbol]);
+
   async function refreshAccount(options?: { autoCreateIfMissing?: boolean }) {
     const token = tokenStore.accessToken;
     if (!token) {
       setAccountMissing(true);
-      setPaperAccount(null);
-      setError("Session token unavailable. Please log in again.");
+      setPaperAccount((current) => current ?? buildFallbackPaperAccountSummary());
+      setError("Session token unavailable. Showing fallback demo state.");
       setLoading(false);
       return;
     }
@@ -422,7 +570,7 @@ function DemoTradingPageContent() {
           return;
         } catch (createError) {
           setAccountMissing(true);
-          setPaperAccount(null);
+          setPaperAccount((current) => current ?? buildFallbackPaperAccountSummary());
           setError((createError as Error).message);
           return;
         }
@@ -430,15 +578,88 @@ function DemoTradingPageContent() {
 
       if (missingAccount) {
         setAccountMissing(true);
-        setPaperAccount(null);
+        setPaperAccount((current) => current ?? buildFallbackPaperAccountSummary());
         setError(null);
       } else {
         setError(message);
+        setPaperAccount((current) => current ?? buildFallbackPaperAccountSummary());
       }
     } finally {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    let active = true;
+    const releaseLoading = window.setTimeout(() => {
+      if (active) {
+        setIsPageLoading(false);
+      }
+    }, 1000);
+
+    const initTradeDesk = async () => {
+      try {
+        const marketTasks = await Promise.allSettled([
+          withTimeout(
+            marketsService.getOverview([bootSymbol]),
+            MARKET_INIT_TIMEOUT_MS,
+            "Timed out while loading market overview.",
+          ),
+          withTimeout(
+            marketsService.getCandles(bootSymbol, bootInterval, 120),
+            MARKET_INIT_TIMEOUT_MS,
+            "Timed out while loading initial candles.",
+          ),
+        ]);
+
+        if (!active) return;
+
+        const [overviewResult, candlesResult] = marketTasks;
+
+        if (overviewResult.status === "fulfilled") {
+          const livePair = overviewResult.value.pairs[0] ?? buildFallbackPairSnapshot(bootSymbol);
+          setMarketPair(livePair);
+          setPairOptions((current) => {
+            const map = new Map(current.map((pair) => [pair.symbol, pair]));
+            map.set(livePair.symbol, livePair);
+            return withSelectedPair([...map.values()].slice(0, 20), bootSymbol);
+          });
+          setRestFallback(!overviewResult.value.streaming);
+        } else {
+          setRestFallback(true);
+          setError((previous) => previous ?? overviewResult.reason?.message ?? "Unable to load market overview.");
+        }
+
+        if (candlesResult.status === "fulfilled") {
+          setCandles(
+            candlesResult.value.candles.length > 0
+              ? candlesResult.value.candles
+              : buildFallbackCandles(bootSymbol, bootInterval),
+          );
+        } else {
+          setCandles(buildFallbackCandles(bootSymbol, bootInterval));
+          setRestFallback(true);
+        }
+      } catch (err) {
+        if (!active) return;
+        console.error("Trade desk init failed:", err);
+        setRestFallback(true);
+        setPaperAccount((current) => current ?? buildFallbackPaperAccountSummary());
+        setError((err as Error).message);
+      } finally {
+        if (active) {
+          setIsPageLoading(false);
+        }
+      }
+    };
+
+    void initTradeDesk();
+
+    return () => {
+      active = false;
+      clearTimeout(releaseLoading);
+    };
+  }, [bootInterval, bootSymbol]);
 
   useEffect(() => {
     let cancelled = false;
@@ -458,9 +679,14 @@ function DemoTradingPageContent() {
         const pairMap = new Map<string, MarketTickerSnapshot>();
         searchResponse.pairs.forEach((pair) => pairMap.set(pair.symbol, pair));
         overview.pairs.forEach((pair) => pairMap.set(pair.symbol, pair));
+        pairMap.set(selectedSymbol, overview.pairs[0] ?? buildFallbackPairSnapshot(selectedSymbol));
         setPairOptions(withSelectedPair([...pairMap.values()].slice(0, 20), selectedSymbol));
-        setMarketPair(overview.pairs[0] ?? null);
-        setCandles(candleResponse.candles);
+        setMarketPair(overview.pairs[0] ?? buildFallbackPairSnapshot(selectedSymbol));
+        setCandles(
+          candleResponse.candles.length > 0
+            ? candleResponse.candles
+            : buildFallbackCandles(selectedSymbol, selectedInterval),
+        );
         setOrderBook(orderBookResponse.orderBook);
         setRecentTrades(recentTradesResponse.trades);
         setRestFallback(!overview.streaming);
@@ -470,6 +696,12 @@ function DemoTradingPageContent() {
           if (shouldFallbackToDefaultMarketSymbol(message)) {
             setSelectedSymbol((current) => (current === TRACKED_SYMBOLS[0] ? current : TRACKED_SYMBOLS[0]));
           }
+          setMarketPair((current) => current ?? buildFallbackPairSnapshot(selectedSymbol));
+          setCandles((current) =>
+            current.length > 0 ? current : buildFallbackCandles(selectedSymbol, selectedInterval),
+          );
+          setPairOptions((current) => withSelectedPair(current, selectedSymbol));
+          setRestFallback(true);
           setError(message);
         }
       }
@@ -486,7 +718,7 @@ function DemoTradingPageContent() {
     const connection = marketsService.connectSocket({
       onConnect(connected) {
         setIsSocketConnected(connected);
-        setRestFallback((current) => (connected ? false : current));
+        setRestFallback(connected ? false : true);
       },
       onTicker(ticker) {
         if (ticker.symbol === selectedSymbol) {
@@ -571,8 +803,12 @@ function DemoTradingPageContent() {
             marketsService.getRecentTrades(selectedSymbol, 80),
           ]);
 
-          setMarketPair(overview.pairs[0] ?? null);
-          setCandles(candleResponse.candles);
+          setMarketPair(overview.pairs[0] ?? buildFallbackPairSnapshot(selectedSymbol));
+          setCandles(
+            candleResponse.candles.length > 0
+              ? candleResponse.candles
+              : buildFallbackCandles(selectedSymbol, selectedInterval),
+          );
           setOrderBook(orderBookResponse.orderBook);
           setRecentTrades(recentTradesResponse.trades);
           setRestFallback(true);
@@ -779,11 +1015,11 @@ function DemoTradingPageContent() {
     return { label: `RISK: LOW (${distancePercent.toFixed(2)}%)`, className: "text-emerald-300" };
   }
 
-  if (isBootstrapping || (loading && !paperAccount && !accountMissing)) {
+  if (isPageLoading && !paperAccount) {
     return <LoadingState label="Loading demo trading desk" />;
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated && !isBootstrapping) {
     return (
       <section className="space-y-4">
         <h1 className="text-3xl font-semibold text-white">Demo Trading</h1>
@@ -817,6 +1053,7 @@ function DemoTradingPageContent() {
         <p className="text-sm text-slate-400">
           Broker-style simulated trading with live market pricing, isolated leverage, and no real-money execution.
         </p>
+        {loading ? <p className="text-xs text-slate-500">Syncing demo account in the background...</p> : null}
       </header>
 
       {error ? (
