@@ -42,20 +42,13 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
   const [demoAttempted, setDemoAttempted] = useState(false);
-  const [nextPath, setNextPath] = useState("/dashboard");
-
-  useEffect(() => {
-    const next = new URLSearchParams(window.location.search).get("next");
-    if (next && next.startsWith("/")) {
-      setNextPath(next);
-    }
-  }, []);
 
   useEffect(() => {
     if (!isBootstrapping && isAuthenticated) {
-      router.replace(nextPath);
+      router.replace("/");
+      router.refresh();
     }
-  }, [isAuthenticated, isBootstrapping, router, nextPath]);
+  }, [isAuthenticated, isBootstrapping, router]);
 
   useEffect(() => {
     const shouldAutoDemo = new URLSearchParams(window.location.search).get("demo") === "1";
@@ -99,7 +92,8 @@ export default function LoginPage() {
 
     try {
       await login(formData);
-      router.replace(nextPath);
+      router.replace("/");
+      router.refresh();
     } catch (error) {
       setFormError(friendlyErrorMessage(error, "We could not sign you in. Please check the details and try again."));
     } finally {
@@ -114,7 +108,8 @@ export default function LoginPage() {
 
     try {
       await login(DEMO_LOGIN);
-      router.replace(nextPath);
+      router.replace("/");
+      router.refresh();
     } catch {
       setFormData(DEMO_LOGIN);
       setFormError(
