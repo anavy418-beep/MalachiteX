@@ -48,7 +48,7 @@ const MARKET_SORT_OPTIONS: Array<{ value: MarketSortOption; label: string }> = [
   { value: "price_high", label: "Price (High)" },
   { value: "price_low", label: "Price (Low)" },
 ];
-const FALLBACK_COIN_ICON = "/fallback-coin.png";
+const FALLBACK_COIN_ICON = "/icons/coin-fallback.svg";
 
 function formatPrice(price: string) {
   const value = Number.parseFloat(price);

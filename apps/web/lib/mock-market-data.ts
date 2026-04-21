@@ -71,9 +71,54 @@ const MOCK_MARKET_DATA_SEED: Array<Omit<MockMarketCoin, "icon">> = [
   { name: "Algorand", symbol: "ALGO", price: 0.2, change24h: -0.22, marketCapBillions: 1.6, volume24hBillions: 0.09, category: "Layer 1", trend: [51, 50, 49, 48, 48, 47, 46] },
 ];
 
-const buildCryptoIconUrl = (symbol: string) => `https://cryptoicons.org/api/icon/${symbol.toLowerCase()}/200`;
+const AVAILABLE_COIN_ICONS = new Set([
+  "aave",
+  "ada",
+  "algo",
+  "apt",
+  "arb",
+  "atom",
+  "avax",
+  "bch",
+  "bnb",
+  "btc",
+  "doge",
+  "dot",
+  "etc",
+  "eth",
+  "fil",
+  "hbar",
+  "icp",
+  "inj",
+  "kas",
+  "link",
+  "ltc",
+  "near",
+  "op",
+  "pepe",
+  "pol",
+  "rndr",
+  "shib",
+  "sol",
+  "sui",
+  "ton",
+  "trx",
+  "uni",
+  "usdc",
+  "usdt",
+  "xlm",
+  "xrp",
+]);
+
+const buildCoinIconPath = (symbol: string) => {
+  const normalized = symbol.toLowerCase();
+  if (AVAILABLE_COIN_ICONS.has(normalized)) {
+    return `/coins/${normalized}.svg`;
+  }
+  return "/icons/coin-fallback.svg";
+};
 
 export const MOCK_MARKET_DATA: MockMarketCoin[] = MOCK_MARKET_DATA_SEED.map((coin) => ({
   ...coin,
-  icon: buildCryptoIconUrl(coin.symbol),
+  icon: buildCoinIconPath(coin.symbol),
 }));
