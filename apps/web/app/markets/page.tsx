@@ -17,7 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { MarketChartShell } from "@/components/markets/market-chart-shell";
-import { MARKET_CATEGORIES, MOCK_MARKET_DATA, type MockMarketCoin } from "@/lib/mock-market-data";
+import { MARKET_CATEGORIES, type MarketCategory } from "@/lib/mock-market-data";
 import {
   buildMarketSelectionPath,
   DEFAULT_SUPPORTED_MARKET_SYMBOLS,
@@ -49,6 +49,82 @@ const MARKET_SORT_OPTIONS: Array<{ value: MarketSortOption; label: string }> = [
   { value: "price_low", label: "Price (Low)" },
 ];
 const FALLBACK_COIN_ICON = "/icons/coin-fallback.png";
+const COINGECKO_MARKETS_ENDPOINT =
+  "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1&sparkline=true&price_change_percentage=24h";
+
+type CoinGeckoMarketItem = {
+  id: string;
+  symbol: string;
+  name: string;
+  image: string;
+  current_price: number;
+  market_cap: number;
+  market_cap_rank: number | null;
+  total_volume: number;
+  price_change_percentage_24h: number | null;
+  price_change_percentage_24h_in_currency?: number | null;
+  sparkline_in_7d?: { price?: number[] };
+};
+
+type LiveMarketCoin = {
+  id: string;
+  name: string;
+  symbol: string;
+  price: number;
+  change24h: number;
+  marketCap: number;
+  volume24h: number;
+  category: MarketCategory;
+  icon: string;
+  trend: number[];
+};
+
+const STABLE_SYMBOLS = new Set(["USDT", "USDC", "DAI", "FDUSD", "USDE"]);
+const MEME_SYMBOLS = new Set(["DOGE", "SHIB", "PEPE", "BONK", "WIF", "FLOKI"]);
+const EXCHANGE_SYMBOLS = new Set(["BNB", "OKB", "LEO", "BGB", "CRO", "KCS"]);
+const LAYER2_SYMBOLS = new Set(["ARB", "OP", "POL", "MATIC", "STRK", "IMX"]);
+const DEFI_SYMBOLS = new Set(["UNI", "AAVE", "LINK", "MKR", "INJ", "SNX", "COMP"]);
+const AI_WEB3_SYMBOLS = new Set(["RNDR", "RENDER", "NEAR", "ICP", "FET", "TAO", "GRT", "FIL"]);
+
+function inferCategory(coin: CoinGeckoMarketItem): MarketCategory {
+  const symbol = coin.symbol.toUpperCase();
+
+  if (STABLE_SYMBOLS.has(symbol)) return "Stablecoin";
+  if (MEME_SYMBOLS.has(symbol)) return "Meme";
+  if (EXCHANGE_SYMBOLS.has(symbol)) return "Exchange";
+  if (LAYER2_SYMBOLS.has(symbol)) return "Layer 2";
+  if (DEFI_SYMBOLS.has(symbol)) return "DeFi";
+  if (AI_WEB3_SYMBOLS.has(symbol)) return "AI / Web3";
+  if (coin.market_cap_rank !== null && coin.market_cap_rank <= 10) return "Large Cap";
+  return "Layer 1";
+}
+
+function toLiveMarketCoin(coin: CoinGeckoMarketItem): LiveMarketCoin {
+  const trendSource = Array.isArray(coin.sparkline_in_7d?.price) ? coin.sparkline_in_7d?.price : [];
+  const trend = trendSource
+    .slice(-24)
+    .map((value) => (Number.isFinite(value) ? value : coin.current_price))
+    .filter((value) => Number.isFinite(value));
+  const safeTrend = trend.length >= 2 ? trend : [coin.current_price, coin.current_price];
+
+  const change24h =
+    coin.price_change_percentage_24h_in_currency ??
+    coin.price_change_percentage_24h ??
+    0;
+
+  return {
+    id: coin.id,
+    name: coin.name,
+    symbol: coin.symbol.toUpperCase(),
+    price: Number.isFinite(coin.current_price) ? coin.current_price : 0,
+    change24h: Number.isFinite(change24h) ? change24h : 0,
+    marketCap: Number.isFinite(coin.market_cap) ? coin.market_cap : 0,
+    volume24h: Number.isFinite(coin.total_volume) ? coin.total_volume : 0,
+    category: inferCategory(coin),
+    icon: typeof coin.image === "string" && coin.image.length > 0 ? coin.image : FALLBACK_COIN_ICON,
+    trend: safeTrend,
+  };
+}
 
 function formatPrice(price: string) {
   const value = Number.parseFloat(price);
@@ -92,14 +168,11 @@ function formatUsd(value: number) {
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 8 })}`;
 }
 
-function formatBillions(value: number) {
-  if (value >= 1000) {
-    return `${(value / 1000).toFixed(2)}T`;
-  }
-  if (value >= 100) {
-    return `${value.toFixed(0)}B`;
-  }
-  return `${value.toFixed(1)}B`;
+function formatCompact(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 2,
+  }).format(value);
 }
 
 function MarketsPageContent() {
@@ -136,6 +209,11 @@ function MarketsPageContent() {
   const [marketSearch, setMarketSearch] = useState("");
   const [marketCategory, setMarketCategory] = useState<(typeof MARKET_CATEGORIES)[number]>("All");
   const [marketSort, setMarketSort] = useState<MarketSortOption>("market_cap");
+  const [marketData, setMarketData] = useState<LiveMarketCoin[]>([]);
+  const [marketLoading, setMarketLoading] = useState(true);
+  const [marketError, setMarketError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [marketPollMs, setMarketPollMs] = useState(10_000);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [restFallback, setRestFallback] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -181,15 +259,15 @@ function MarketsPageContent() {
     querySelection.symbol === selectedSymbol && querySelection.interval === selectedInterval;
   const fullMarketRows = useMemo(() => {
     const query = marketSearch.trim().toLowerCase();
-    const filtered = MOCK_MARKET_DATA.filter((coin) => {
+    const filtered = marketData.filter((coin) => {
       if (marketCategory !== "All" && coin.category !== marketCategory) return false;
       if (!query) return true;
       return coin.name.toLowerCase().includes(query) || coin.symbol.toLowerCase().includes(query);
     });
 
     const sorted = [...filtered].sort((left, right) => {
-      if (marketSort === "market_cap") return right.marketCapBillions - left.marketCapBillions;
-      if (marketSort === "volume") return right.volume24hBillions - left.volume24hBillions;
+      if (marketSort === "market_cap") return right.marketCap - left.marketCap;
+      if (marketSort === "volume") return right.volume24h - left.volume24h;
       if (marketSort === "gainers") return right.change24h - left.change24h;
       if (marketSort === "losers") return left.change24h - right.change24h;
       if (marketSort === "price_high") return right.price - left.price;
@@ -197,7 +275,59 @@ function MarketsPageContent() {
     });
 
     return sorted;
-  }, [marketCategory, marketSearch, marketSort]);
+  }, [marketCategory, marketData, marketSearch, marketSort]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function fetchMarketRows() {
+      try {
+        const response = await fetch(COINGECKO_MARKETS_ENDPOINT, {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          throw new Error(`Live market request failed (${response.status})`);
+        }
+
+        const payload = (await response.json()) as CoinGeckoMarketItem[];
+        if (!active) return;
+
+        const mappedRows = payload
+          .map(toLiveMarketCoin)
+          .filter((coin) => Number.isFinite(coin.price) && coin.price > 0);
+
+        if (mappedRows.length > 0) {
+          setMarketData(mappedRows);
+          setMarketError(null);
+          setLastUpdated(new Date());
+          setMarketPollMs(10_000);
+        } else {
+          setMarketError("Live market feed returned no rows.");
+        }
+      } catch (fetchError) {
+        if (!active) return;
+        const message = fetchError instanceof Error ? fetchError.message : "Failed to load live market feed.";
+        setMarketError(message);
+        if (message.includes("(429)")) {
+          setMarketPollMs(15_000);
+        }
+      } finally {
+        if (active) {
+          setMarketLoading(false);
+        }
+      }
+    }
+
+    void fetchMarketRows();
+    const intervalId = window.setInterval(() => {
+      void fetchMarketRows();
+    }, marketPollMs);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [marketPollMs]);
 
   useEffect(() => {
     setSelectedSymbol((current) =>
@@ -465,6 +595,9 @@ function MarketsPageContent() {
               <CardDescription>
                 Exchange-style market board with large-cap, meme, L1/L2, DeFi, stablecoins, and AI/Web3 assets.
               </CardDescription>
+              <p className="mt-1 text-xs text-slate-500">
+                {lastUpdated ? `Last updated ${lastUpdated.toLocaleTimeString()}` : "Waiting for first live tick..."}
+              </p>
             </div>
             <div className="flex gap-2">
               <label className="relative">
@@ -508,23 +641,84 @@ function MarketsPageContent() {
         </CardHeader>
 
         <CardContent className="space-y-3">
-          <div className="hidden overflow-x-auto lg:block">
-            <table className="min-w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-zinc-800 text-xs uppercase tracking-wide text-slate-500">
-                  <th className="px-3 py-3">Asset</th>
-                  <th className="px-3 py-3">Price</th>
-                  <th className="px-3 py-3">24h</th>
-                  <th className="px-3 py-3">Market Cap</th>
-                  <th className="px-3 py-3">Volume (24h)</th>
-                  <th className="px-3 py-3">Trend</th>
-                  <th className="px-3 py-3 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody>
+          {marketLoading && fullMarketRows.length === 0 ? (
+            <p className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-4 text-sm text-slate-400">
+              Loading live market...
+            </p>
+          ) : null}
+          {marketError ? (
+            <p className="rounded-xl border border-amber-800/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+              Live feed notice: {marketError}
+            </p>
+          ) : null}
+
+          {fullMarketRows.length > 0 ? (
+            <>
+              <div className="hidden overflow-x-auto lg:block">
+                <table className="min-w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-zinc-800 text-xs uppercase tracking-wide text-slate-500">
+                      <th className="px-3 py-3">Asset</th>
+                      <th className="px-3 py-3">Price</th>
+                      <th className="px-3 py-3">24h</th>
+                      <th className="px-3 py-3">Market Cap</th>
+                      <th className="px-3 py-3">Volume (24h)</th>
+                      <th className="px-3 py-3">Trend</th>
+                      <th className="px-3 py-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fullMarketRows.map((coin) => (
+                      <tr key={coin.id} className="border-b border-zinc-900/80 text-slate-100">
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-3">
+                            <img
+                              src={coin.icon}
+                              alt={`${coin.name} logo`}
+                              className="h-10 w-10 rounded-full bg-transparent object-contain"
+                              loading="lazy"
+                              decoding="async"
+                              onError={(event) => {
+                                event.currentTarget.onerror = null;
+                                event.currentTarget.src = FALLBACK_COIN_ICON;
+                              }}
+                            />
+                            <div>
+                              <p className="font-semibold">{coin.name}</p>
+                              <p className="text-xs text-slate-500">{coin.symbol}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3 text-white font-medium">{formatUsd(coin.price)}</td>
+                        <td className={`px-3 py-3 font-semibold ${coin.change24h >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                          {coin.change24h >= 0 ? "+" : ""}
+                          {coin.change24h.toFixed(2)}%
+                        </td>
+                        <td className="px-3 py-3 text-slate-300">${formatCompact(coin.marketCap)}</td>
+                        <td className="px-3 py-3 text-slate-300">${formatCompact(coin.volume24h)}</td>
+                        <td className="px-3 py-3">
+                          <MiniTrend points={coin.trend} positive={coin.change24h >= 0} />
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex justify-end gap-2">
+                            <Button size="sm" className="h-8 px-3">
+                              Buy
+                            </Button>
+                            <Button size="sm" variant="outline" className="h-8 px-3">
+                              Trade
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="grid gap-3 lg:hidden">
                 {fullMarketRows.map((coin) => (
-                  <tr key={coin.symbol} className="border-b border-zinc-900/80 text-slate-100">
-                    <td className="px-3 py-3">
+                  <article key={`mobile-${coin.id}`} className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-3">
+                    <div className="flex items-center justify-between gap-3">
                       <div className="flex items-center gap-3">
                         <img
                           src={coin.icon}
@@ -538,23 +732,25 @@ function MarketsPageContent() {
                           }}
                         />
                         <div>
-                          <p className="font-semibold">{coin.name}</p>
+                          <p className="text-sm font-semibold text-slate-100">{coin.name}</p>
                           <p className="text-xs text-slate-500">{coin.symbol}</p>
                         </div>
                       </div>
-                    </td>
-                    <td className="px-3 py-3">{formatUsd(coin.price)}</td>
-                    <td className={`px-3 py-3 font-medium ${coin.change24h >= 0 ? "text-emerald-300" : "text-red-300"}`}>
-                      {coin.change24h >= 0 ? "+" : ""}
-                      {coin.change24h.toFixed(2)}%
-                    </td>
-                    <td className="px-3 py-3 text-slate-300">${formatBillions(coin.marketCapBillions)}</td>
-                    <td className="px-3 py-3 text-slate-300">${formatBillions(coin.volume24hBillions)}</td>
-                    <td className="px-3 py-3">
+                      <div className="text-right">
+                        <p className="text-sm font-medium text-white">{formatUsd(coin.price)}</p>
+                        <p className={`text-xs font-semibold ${coin.change24h >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                          {coin.change24h >= 0 ? "+" : ""}
+                          {coin.change24h.toFixed(2)}%
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-400">
+                      <p>MCap: ${formatCompact(coin.marketCap)}</p>
+                      <p>Vol: ${formatCompact(coin.volume24h)}</p>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
                       <MiniTrend points={coin.trend} positive={coin.change24h >= 0} />
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="flex justify-end gap-2">
+                      <div className="flex gap-2">
                         <Button size="sm" className="h-8 px-3">
                           Buy
                         </Button>
@@ -562,60 +758,12 @@ function MarketsPageContent() {
                           Trade
                         </Button>
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="grid gap-3 lg:hidden">
-            {fullMarketRows.map((coin) => (
-              <article key={`mobile-${coin.symbol}`} className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <img
-                      src={coin.icon}
-                      alt={`${coin.name} logo`}
-                      className="h-10 w-10 rounded-full bg-transparent object-contain"
-                      loading="lazy"
-                      decoding="async"
-                      onError={(event) => {
-                        event.currentTarget.onerror = null;
-                        event.currentTarget.src = FALLBACK_COIN_ICON;
-                      }}
-                    />
-                    <div>
-                      <p className="text-sm font-semibold text-slate-100">{coin.name}</p>
-                      <p className="text-xs text-slate-500">{coin.symbol}</p>
                     </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold text-white">{formatUsd(coin.price)}</p>
-                    <p className={`text-xs ${coin.change24h >= 0 ? "text-emerald-300" : "text-red-300"}`}>
-                      {coin.change24h >= 0 ? "+" : ""}
-                      {coin.change24h.toFixed(2)}%
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-400">
-                  <p>MCap: ${formatBillions(coin.marketCapBillions)}</p>
-                  <p>Vol: ${formatBillions(coin.volume24hBillions)}</p>
-                </div>
-                <div className="mt-3 flex items-center justify-between">
-                  <MiniTrend points={coin.trend} positive={coin.change24h >= 0} />
-                  <div className="flex gap-2">
-                    <Button size="sm" className="h-8 px-3">
-                      Buy
-                    </Button>
-                    <Button size="sm" variant="outline" className="h-8 px-3">
-                      Trade
-                    </Button>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
+                  </article>
+                ))}
+              </div>
+            </>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -857,7 +1005,7 @@ function MiniTrend({
   points,
   positive,
 }: {
-  points: MockMarketCoin["trend"];
+  points: number[];
   positive: boolean;
 }) {
   const max = Math.max(...points);
