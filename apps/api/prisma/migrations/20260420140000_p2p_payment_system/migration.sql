@@ -1,4 +1,4 @@
-﻿ALTER TABLE "Offer" ADD COLUMN "paymentDetails" JSONB;
-ALTER TABLE "Trade" ADD COLUMN "paymentInstructions" JSONB;
-ALTER TABLE "Trade" ADD COLUMN "paymentProof" JSONB;
-ALTER TABLE "Trade" ADD COLUMN "sellerPaymentConfirmedAt" TIMESTAMP(3);
+ALTER TABLE "Offer" ADD COLUMN IF NOT EXISTS "paymentDetails" JSONB;
+ALTER TABLE "Trade" ADD COLUMN IF NOT EXISTS "paymentInstructions" JSONB;
+ALTER TABLE "Trade" ADD COLUMN IF NOT EXISTS "paymentProof" JSONB;
+ALTER TABLE "Trade" ADD COLUMN IF NOT EXISTS "sellerPaymentConfirmedAt" TIMESTAMP(3);

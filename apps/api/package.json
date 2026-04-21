@@ -13,7 +13,7 @@
     "test:watch": "jest --watch",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:migrate:deploy": "echo \"[db] Checking Prisma migration status...\" && prisma migrate status && echo \"[db] Running prisma migrate deploy...\" && prisma migrate deploy",
     "prisma:migrate:reset": "prisma migrate reset --force",
     "prisma:seed": "prisma db seed"
   },
