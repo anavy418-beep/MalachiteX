@@ -104,11 +104,7 @@ function safeBigInt(value: string | bigint | number | null | undefined) {
 
 export default function TradesPage() {
   const { user, isAuthenticated, isBootstrapping } = useAuth();
-  const hasSessionMarker = tokenStore.hasSessionMarker();
-  const isSessionResolved = !isBootstrapping;
-  const hasAuthenticatedUser = isAuthenticated && Boolean(user);
-  const shouldShowGuestScreen = isSessionResolved && !hasAuthenticatedUser && !hasSessionMarker;
-  const shouldHoldDashboardShell = !shouldShowGuestScreen && !hasAuthenticatedUser;
+  const authenticatedUser = isAuthenticated && user ? user : null;
 
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [wallet, setWallet] = useState<WalletSummary | null>(null);
@@ -127,7 +123,7 @@ export default function TradesPage() {
       return;
     }
 
-    if (!hasAuthenticatedUser) {
+    if (!authenticatedUser) {
       setTrades([]);
       setWallet(null);
       setError(null);
@@ -179,7 +175,7 @@ export default function TradesPage() {
     return () => {
       active = false;
     };
-  }, [hasAuthenticatedUser, isBootstrapping, refreshNonce]);
+  }, [authenticatedUser?.id, isBootstrapping, refreshNonce]);
 
   const pairOptions = useMemo(() => {
     const pairs = new Set<string>(QUICK_PAIRS);
@@ -237,7 +233,7 @@ export default function TradesPage() {
   );
 
   const filteredTrades = useMemo(() => {
-    if (!user) return [] as TradeRecord[];
+    if (!authenticatedUser) return [] as TradeRecord[];
 
     const loweredSearch = searchQuery.trim().toLowerCase();
 
@@ -255,8 +251,8 @@ export default function TradesPage() {
 
         if (!loweredSearch) return true;
 
-        const direction = toTradeDirection(trade, user.id);
-        const counterparty = toCounterpartyLabel(trade, user.id);
+        const direction = toTradeDirection(trade, authenticatedUser.id);
+        const counterparty = toCounterpartyLabel(trade, authenticatedUser.id);
 
         const haystack = [
           trade.id,
@@ -271,7 +267,7 @@ export default function TradesPage() {
 
         return haystack.includes(loweredSearch);
       });
-  }, [activeTab, pairFilter, searchQuery, trades, user]);
+  }, [activeTab, authenticatedUser, pairFilter, searchQuery, trades]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -288,11 +284,11 @@ export default function TradesPage() {
     setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
 
-  if (isBootstrapping || shouldHoldDashboardShell) {
+  if (isBootstrapping) {
     return <LoadingState label="Loading trade dashboard" />;
   }
 
-  if (shouldShowGuestScreen) {
+  if (!authenticatedUser) {
     return (
       <section className="space-y-6">
         <header className="space-y-2">
@@ -305,7 +301,7 @@ export default function TradesPage() {
           <CardContent className="space-y-4 pt-6">
             <p className="text-sm text-slate-300">No active session found for this trade workspace.</p>
             <div className="flex flex-wrap gap-3">
-              <Link href="/login">
+              <Link href="/login?next=/trades">
                 <Button>Log in</Button>
               </Link>
               <Link href="/signup">
@@ -316,10 +312,6 @@ export default function TradesPage() {
         </Card>
       </section>
     );
-  }
-
-  if (!user) {
-    return <LoadingState label="Loading trade dashboard" />;
   }
 
   return (
@@ -530,7 +522,7 @@ export default function TradesPage() {
                   <tbody className="divide-y divide-zinc-800 bg-zinc-950/40">
                     {paginatedTrades.map((trade) => {
                       const pair = toTradePair(trade);
-                      const direction = toTradeDirection(trade, user.id);
+                      const direction = toTradeDirection(trade, authenticatedUser.id);
                       const dashboardStatus = toDashboardStatus(trade.status);
                       const createdAt = trade.createdAt ?? trade.openedAt ?? null;
                       const asset = trade.offer?.asset ?? "USDT";
@@ -547,7 +539,7 @@ export default function TradesPage() {
                           </td>
                           <td className="px-4 py-3 text-slate-200">{formatMinorUnits(trade.amountMinor, asset)}</td>
                           <td className="px-4 py-3 text-slate-200">{formatMinorUnits(trade.fiatPriceMinor, fiat)}</td>
-                          <td className="px-4 py-3 text-slate-200">{toCounterpartyLabel(trade, user.id)}</td>
+                          <td className="px-4 py-3 text-slate-200">{toCounterpartyLabel(trade, authenticatedUser.id)}</td>
                           <td className="px-4 py-3">
                             <span className={`rounded-full border px-2 py-1 text-xs font-medium ${statusBadgeTone(dashboardStatus)}`}>
                               {dashboardStatus}

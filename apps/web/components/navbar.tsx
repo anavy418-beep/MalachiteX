@@ -28,9 +28,11 @@ export function Navbar() {
 
     try {
       await logout();
-      router.push("/login");
-      router.refresh();
+    } catch (error) {
+      console.error("Logout failed", error);
     } finally {
+      router.replace("/login");
+      router.refresh();
       setIsLoggingOut(false);
     }
   }

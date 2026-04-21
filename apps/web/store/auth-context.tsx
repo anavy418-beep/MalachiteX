@@ -67,8 +67,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
-    await authService.logout();
-    setUser(null);
+    try {
+      await authService.logout();
+    } finally {
+      tokenStore.clear();
+      setUser(null);
+    }
   }, []);
 
   const forgotPassword = useCallback((email: string) => {

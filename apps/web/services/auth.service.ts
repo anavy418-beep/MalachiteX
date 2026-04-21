@@ -66,6 +66,10 @@ export const authService = {
       await apiRequest("/auth/logout", {
         method: "POST",
       });
+    } catch (error) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("Logout request failed; applying local sign-out fallback.", error);
+      }
     } finally {
       tokenStore.clear();
     }
