@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useDeferredValue, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Suspense, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Activity,
   ArrowDownRight,
@@ -49,25 +49,30 @@ const MARKET_SORT_OPTIONS: Array<{ value: MarketSortOption; label: string }> = [
   { value: "price_low", label: "Price (Low)" },
 ];
 const FALLBACK_COIN_ICON = "/icons/coin-fallback.png";
-const COINGECKO_MARKETS_ENDPOINT =
-  "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1&sparkline=true&price_change_percentage=24h";
+const LIVE_MARKET_API_ENDPOINT = "/api/market/live";
 const BINANCE_REST_BASE_URL = "https://api.binance.com";
 const BINANCE_STREAM_BASE_URL = "wss://stream.binance.com:9443/ws";
 const CHART_BOOTSTRAP_LIMIT = 100;
 const CHART_RECONNECT_DELAY_MS = 2_000;
+const MARKET_REFRESH_INTERVAL_MS = 10_000;
+const MARKET_RETRY_BASE_MS = 2_500;
+const MARKET_RETRY_MAX_MS = 30_000;
 
 type CoinGeckoMarketItem = {
   id: string;
   symbol: string;
   name: string;
-  image: string;
-  current_price: number;
-  market_cap: number;
-  market_cap_rank: number | null;
-  total_volume: number;
-  price_change_percentage_24h: number | null;
-  price_change_percentage_24h_in_currency?: number | null;
-  sparkline_in_7d?: { price?: number[] };
+  icon: string;
+  price: number;
+  change24h: number;
+  marketCap: number;
+  volume24h: number;
+  trend?: number[];
+};
+
+type LiveMarketApiResponse = {
+  items: CoinGeckoMarketItem[];
+  fetchedAt: string;
 };
 
 type LiveMarketCoin = {
@@ -160,33 +165,31 @@ function inferCategory(coin: CoinGeckoMarketItem): MarketCategory {
   if (LAYER2_SYMBOLS.has(symbol)) return "Layer 2";
   if (DEFI_SYMBOLS.has(symbol)) return "DeFi";
   if (AI_WEB3_SYMBOLS.has(symbol)) return "AI / Web3";
-  if (coin.market_cap_rank !== null && coin.market_cap_rank <= 10) return "Large Cap";
+  if (coin.marketCap >= 10_000_000_000) return "Large Cap";
   return "Layer 1";
 }
 
 function toLiveMarketCoin(coin: CoinGeckoMarketItem): LiveMarketCoin {
-  const trendSource = Array.isArray(coin.sparkline_in_7d?.price) ? coin.sparkline_in_7d?.price : [];
+  const trendSource = Array.isArray(coin.trend) ? coin.trend : [];
   const trend = trendSource
     .slice(-24)
-    .map((value) => (Number.isFinite(value) ? value : coin.current_price))
+    .map((value) => (Number.isFinite(value) ? value : coin.price))
     .filter((value) => Number.isFinite(value));
-  const safeTrend = trend.length >= 2 ? trend : [coin.current_price, coin.current_price];
-
-  const change24h =
-    coin.price_change_percentage_24h_in_currency ??
-    coin.price_change_percentage_24h ??
-    0;
+  const baseline = Number.isFinite(coin.price) && Number.isFinite(coin.change24h)
+    ? coin.price / (1 + coin.change24h / 100)
+    : coin.price;
+  const safeTrend = trend.length >= 2 ? trend : [baseline, coin.price];
 
   return {
     id: coin.id,
     name: coin.name,
     symbol: coin.symbol.toUpperCase(),
-    price: Number.isFinite(coin.current_price) ? coin.current_price : 0,
-    change24h: Number.isFinite(change24h) ? change24h : 0,
-    marketCap: Number.isFinite(coin.market_cap) ? coin.market_cap : 0,
-    volume24h: Number.isFinite(coin.total_volume) ? coin.total_volume : 0,
+    price: Number.isFinite(coin.price) ? coin.price : 0,
+    change24h: Number.isFinite(coin.change24h) ? coin.change24h : 0,
+    marketCap: Number.isFinite(coin.marketCap) ? coin.marketCap : 0,
+    volume24h: Number.isFinite(coin.volume24h) ? coin.volume24h : 0,
     category: inferCategory(coin),
-    icon: typeof coin.image === "string" && coin.image.length > 0 ? coin.image : FALLBACK_COIN_ICON,
+    icon: typeof coin.icon === "string" && coin.icon.length > 0 ? coin.icon : FALLBACK_COIN_ICON,
     trend: safeTrend,
   };
 }
@@ -365,7 +368,7 @@ function MarketsPageContent() {
   const [marketError, setMarketError] = useState<string | null>(null);
   const [marketRefreshNonce, setMarketRefreshNonce] = useState(0);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [marketPollMs, setMarketPollMs] = useState(10_000);
+  const [marketFeedMode, setMarketFeedMode] = useState<"LIVE" | "CACHED" | "OFFLINE">("OFFLINE");
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [restFallback, setRestFallback] = useState(false);
   const [chartStreamState, setChartStreamState] = useState<"LIVE" | "RECONNECTING" | "DELAYED">("DELAYED");
@@ -376,6 +379,7 @@ function MarketsPageContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
+  const hasMarketSnapshotRef = useRef(false);
 
   const selectedPair = useMemo(
     () => [...overviewPairs, ...searchResults].find((pair) => pair.symbol === selectedSymbol) ?? null,
@@ -435,56 +439,78 @@ function MarketsPageContent() {
   }, [marketCategory, marketData, marketSearch, marketSort]);
 
   useEffect(() => {
+    hasMarketSnapshotRef.current = marketData.length > 0;
+  }, [marketData.length]);
+
+  useEffect(() => {
     let active = true;
+    let timerId: number | null = null;
+    let consecutiveFailures = 0;
 
     async function fetchMarketRows() {
+      let nextDelay = MARKET_REFRESH_INTERVAL_MS;
       try {
-        const response = await fetch(COINGECKO_MARKETS_ENDPOINT, {
+        const response = await fetch(LIVE_MARKET_API_ENDPOINT, {
           cache: "no-store",
         });
         if (!response.ok) {
-          throw new Error(`Live market request failed (${response.status})`);
+          const payload = (await response.json().catch(() => null)) as { error?: string; details?: string } | null;
+          throw new Error(
+            payload?.details ?? payload?.error ?? `Live market request failed (${response.status})`,
+          );
         }
 
-        const payload = (await response.json()) as CoinGeckoMarketItem[];
+        const payload = (await response.json()) as LiveMarketApiResponse;
         if (!active) return;
 
-        const mappedRows = payload
+        const mappedRows = payload.items
           .map(toLiveMarketCoin)
           .filter((coin) => Number.isFinite(coin.price) && coin.price > 0);
 
-        if (mappedRows.length > 0) {
-          setMarketData(mappedRows);
-          setMarketError(null);
-          setLastUpdated(new Date());
-          setMarketPollMs(10_000);
-        } else {
-          setMarketError("Live market feed returned no rows.");
+        if (mappedRows.length === 0) {
+          throw new Error("Live market feed returned no rows.");
         }
+
+        setMarketData(mappedRows);
+        setMarketError(null);
+        setMarketFeedMode("LIVE");
+        setLastUpdated(new Date(payload.fetchedAt));
+        consecutiveFailures = 0;
+        nextDelay = MARKET_REFRESH_INTERVAL_MS;
       } catch (fetchError) {
         if (!active) return;
         const message = fetchError instanceof Error ? fetchError.message : "Failed to load live market feed.";
-        setMarketError(message);
-        if (message.includes("(429)")) {
-          setMarketPollMs(15_000);
+        console.error("Live market fetch error:", fetchError);
+        const hasSnapshot = hasMarketSnapshotRef.current;
+        if (hasSnapshot) {
+          setMarketFeedMode("CACHED");
+          setMarketError(`Using cached market snapshot. ${message}`);
+        } else {
+          setMarketFeedMode("OFFLINE");
+          setMarketError(`Live market unavailable. ${message}`);
         }
+        consecutiveFailures += 1;
+        const multiplier = 2 ** Math.min(consecutiveFailures - 1, 4);
+        nextDelay = Math.min(MARKET_RETRY_MAX_MS, MARKET_RETRY_BASE_MS * multiplier);
       } finally {
         if (active) {
           setMarketLoading(false);
+          timerId = window.setTimeout(() => {
+            void fetchMarketRows();
+          }, nextDelay);
         }
       }
     }
 
     void fetchMarketRows();
-    const intervalId = window.setInterval(() => {
-      void fetchMarketRows();
-    }, marketPollMs);
 
     return () => {
       active = false;
-      window.clearInterval(intervalId);
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
     };
-  }, [marketPollMs, marketRefreshNonce]);
+  }, [marketRefreshNonce]);
 
   useEffect(() => {
     setSelectedSymbol((current) =>
@@ -897,7 +923,22 @@ function MarketsPageContent() {
                 Exchange-style market board with large-cap, meme, L1/L2, DeFi, stablecoins, and AI/Web3 assets.
               </CardDescription>
               <p className="mt-1 text-xs text-slate-500">
-                {lastUpdated ? `Last updated ${lastUpdated.toLocaleTimeString()}` : "Waiting for first live tick..."}
+                {lastUpdated ? `Last updated ${lastUpdated.toLocaleTimeString()}` : marketLoading ? "Loading live feed..." : "Waiting for live snapshot..."}
+              </p>
+              <p
+                className={`mt-1 text-[11px] ${
+                  marketFeedMode === "LIVE"
+                    ? "text-emerald-300"
+                    : marketFeedMode === "CACHED"
+                      ? "text-amber-300"
+                      : "text-red-300"
+                }`}
+              >
+                {marketFeedMode === "LIVE"
+                  ? "Live market data"
+                  : marketFeedMode === "CACHED"
+                    ? "Using cached market snapshot"
+                    : "Live feed offline"}
               </p>
             </div>
             <div className="flex gap-2">
@@ -957,6 +998,7 @@ function MarketsPageContent() {
                 onClick={() => {
                   setMarketError(null);
                   setMarketLoading(true);
+                  setMarketFeedMode(hasMarketSnapshotRef.current ? "CACHED" : "OFFLINE");
                   setMarketRefreshNonce((current) => current + 1);
                 }}
               >
