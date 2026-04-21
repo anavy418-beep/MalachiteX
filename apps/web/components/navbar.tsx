@@ -31,7 +31,7 @@ export function Navbar() {
     } catch (error) {
       console.error("Logout failed", error);
     } finally {
-      router.replace("/login");
+      router.replace("/");
       router.refresh();
       setIsLoggingOut(false);
     }

@@ -109,7 +109,26 @@ export default function DashboardPage() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
   useEffect(() => {
+    if (isBootstrapping) {
+      return;
+    }
+
+    if (!isAuthenticated) {
+      setWallet(DEMO_WALLET_SUMMARY);
+      setTrades([]);
+      setOffers([]);
+      setWalletFallbackActive(false);
+      setTradesFallbackActive(false);
+      setOffersFallbackActive(false);
+      setNotifications([]);
+      setIsDemo(false);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
     (async () => {
+      setLoading(true);
       const token = tokenStore.accessToken;
       if (!token) {
         setWallet(DEMO_WALLET_SUMMARY);
@@ -119,7 +138,7 @@ export default function DashboardPage() {
         setTradesFallbackActive(true);
         setOffersFallbackActive(true);
         setIsDemo(true);
-        setError("You are viewing the public dashboard preview. Use Try Demo to load a signed-in workspace.");
+        setError("Live dashboard session is syncing. Showing your latest safe snapshot until access is ready.");
         setLoading(false);
         return;
       }
@@ -191,7 +210,7 @@ export default function DashboardPage() {
       );
       setLoading(false);
     })();
-  }, [user?.id]);
+  }, [isAuthenticated, isBootstrapping, user?.id]);
 
   const available = BigInt(wallet.availableBalanceMinor || "0");
   const locked = BigInt(wallet.escrowBalanceMinor || "0");

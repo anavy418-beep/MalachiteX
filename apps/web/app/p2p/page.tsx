@@ -31,6 +31,7 @@ import { tradesService } from "@/services/trades.service";
 import { tokenStore } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { LoadingState } from "@/components/ui/loading-state";
 
 type TradeSide = "BUY" | "SELL";
 type MarketOffer = P2POfferPreview & { ownerUserId?: string };
@@ -137,7 +138,7 @@ function toPreview(offer: OfferRecord): MarketOffer {
 
 export default function P2PPage() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, isAuthenticated, isBootstrapping } = useAuth();
   const [offers, setOffers] = useState<MarketOffer[]>([]);
   const [side, setSide] = useState<TradeSide>(DEFAULT_FILTERS.side);
   const [asset, setAsset] = useState<(typeof P2P_ASSET_OPTIONS)[number]>(DEFAULT_FILTERS.asset);
@@ -180,8 +181,16 @@ export default function P2PPage() {
   }
 
   useEffect(() => {
+    if (isBootstrapping || !isAuthenticated) {
+      setLoading(false);
+      setOffers([]);
+      setError(null);
+      setIsDemo(false);
+      return;
+    }
+
     void loadOffers();
-  }, []);
+  }, [isAuthenticated, isBootstrapping]);
 
   const activeFilterCount = [
     paymentMethod !== "ALL",
@@ -231,13 +240,18 @@ export default function P2PPage() {
   }, [offers, side, asset, currency, paymentMethod, amountMinor, onlineOnly, trustedOnly, sortBy]);
 
   function openTradeModal(offer: MarketOffer) {
+    if (!isAuthenticated) {
+      router.push(`/login?next=${encodeURIComponent("/p2p")}`);
+      return;
+    }
+
     const token = tokenStore.accessToken;
     if (offer.ownerUserId && offer.ownerUserId === user?.id) {
       setError("This is your own offer. Manage it from My Offers.");
       return;
     }
     if (!token) {
-      router.push(`/login?next=${encodeURIComponent("/p2p")}`);
+      setError("Session is syncing. Please try again in a moment.");
       return;
     }
 
@@ -288,8 +302,13 @@ export default function P2PPage() {
     }
 
     const token = tokenStore.accessToken;
-    if (!token) {
+    if (!isAuthenticated) {
       router.push(`/login?next=${encodeURIComponent("/p2p")}`);
+      return;
+    }
+
+    if (!token) {
+      setTradeError("Session is syncing. Please try again in a moment.");
       return;
     }
 
@@ -310,6 +329,22 @@ export default function P2PPage() {
     } finally {
       setSubmittingOfferId(null);
     }
+  }
+
+  if (isBootstrapping) {
+    return <LoadingState label="Loading P2P workspace" />;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <section className="space-y-3">
+        <h1 className="text-2xl font-semibold text-white">P2P Market</h1>
+        <p className="text-sm text-slate-400">Your session is not active. Please log in to access the P2P desk.</p>
+        <Link href="/login">
+          <Button>Go to login</Button>
+        </Link>
+      </section>
+    );
   }
 
   return (

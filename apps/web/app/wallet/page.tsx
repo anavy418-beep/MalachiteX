@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDownToLine, ArrowUpFromLine, Clock3, History, QrCode } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import { tokenStore } from "@/lib/api";
 import { DEMO_WALLET_SUMMARY } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
@@ -16,10 +17,12 @@ import { AddressQrModal } from "@/components/wallet/address-qr-modal";
 import { CopyableValueRow } from "@/components/wallet/copyable-value-row";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { LoadingState } from "@/components/ui/loading-state";
 
 const NETWORKS: WalletNetwork[] = ["ERC20", "TRC20", "BTC"];
 
 export default function WalletPage() {
+  const { isAuthenticated, isBootstrapping } = useAuth();
   const [wallet, setWallet] = useState<WalletSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -29,18 +32,35 @@ export default function WalletPage() {
   const [selectedNetwork, setSelectedNetwork] = useState<WalletNetwork>("ERC20");
 
   useEffect(() => {
-    (async () => {
+    if (isBootstrapping) {
+      return;
+    }
+
+    if (!isAuthenticated) {
+      setWallet(null);
+      setError(null);
+      setIsDemo(false);
+      setLoading(false);
+      return;
+    }
+
+    let active = true;
+
+    const loadWallet = async () => {
+      setLoading(true);
       const token = tokenStore.accessToken;
       if (!token) {
+        if (!active) return;
         setWallet(DEMO_WALLET_SUMMARY);
         setIsDemo(true);
-        setError("Showing the public wallet preview. Use Try Demo to load a signed-in wallet.");
+        setError("Live wallet session is syncing. Showing your wallet preview until session access is ready.");
         setLoading(false);
         return;
       }
 
       try {
         const payload = await walletService.getWallet(token);
+        if (!active) return;
         const hasLiveBalance =
           BigInt(payload.availableBalanceMinor || "0") > 0n || BigInt(payload.escrowBalanceMinor || "0") > 0n;
 
@@ -51,14 +71,23 @@ export default function WalletPage() {
           setWallet(payload);
         }
       } catch (err) {
+        if (!active) return;
         setWallet(DEMO_WALLET_SUMMARY);
         setIsDemo(true);
         setError((err as Error).message);
       } finally {
-        setLoading(false);
+        if (active) {
+          setLoading(false);
+        }
       }
-    })();
-  }, []);
+    };
+
+    void loadWallet();
+
+    return () => {
+      active = false;
+    };
+  }, [isAuthenticated, isBootstrapping]);
 
   const current = wallet ?? DEMO_WALLET_SUMMARY;
   const available = BigInt(current.availableBalanceMinor || "0");
@@ -97,6 +126,22 @@ export default function WalletPage() {
     } catch {
       setError("Clipboard copy failed. Please copy manually.");
     }
+  }
+
+  if (isBootstrapping) {
+    return <LoadingState label="Loading wallet workspace" />;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <section className="space-y-3">
+        <h1 className="text-2xl font-semibold text-white">Wallet</h1>
+        <p className="text-sm text-slate-400">Your session is not active. Please log in to open wallet controls.</p>
+        <Link href="/login">
+          <Button>Go to login</Button>
+        </Link>
+      </section>
+    );
   }
 
   return (
