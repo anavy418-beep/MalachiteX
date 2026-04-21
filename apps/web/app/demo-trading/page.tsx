@@ -45,6 +45,7 @@ import { paperTradingService, type PaperTradingAccountSummary } from "@/services
 const SCALE_FACTOR = 100000000n;
 const LEVERAGE_OPTIONS = ["1", "2", "5", "10"] as const;
 const TRACKED_SYMBOLS = [...DEFAULT_SUPPORTED_MARKET_SYMBOLS];
+const ACCOUNT_INIT_TIMEOUT_MS = 8_000;
 
 function formatSigned(value: string) {
   const parsed = Number.parseFloat(value);
@@ -207,6 +208,23 @@ function reasonLabel(reason: string | null) {
   return reason.replace(/_/g, " ");
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(errorMessage));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 function DemoTradingPageContent() {
   const router = useRouter();
   const pathname = usePathname();
@@ -367,18 +385,50 @@ function DemoTradingPageContent() {
     router.replace(targetSelectionPath, { scroll: false });
   }, [currentPathWithQuery, router, targetSelectionPath]);
 
-  async function refreshAccount() {
+  async function refreshAccount(options?: { autoCreateIfMissing?: boolean }) {
     const token = tokenStore.accessToken;
-    if (!token) return;
+    if (!token) {
+      setAccountMissing(true);
+      setPaperAccount(null);
+      setError("Session token unavailable. Please log in again.");
+      setLoading(false);
+      return;
+    }
 
     try {
-      const summary = await paperTradingService.getAccount(token);
+      const summary = await withTimeout(
+        paperTradingService.getAccount(token),
+        ACCOUNT_INIT_TIMEOUT_MS,
+        "Timed out while loading demo account.",
+      );
       setPaperAccount(summary);
       setAccountMissing(false);
       setError(null);
     } catch (err) {
       const message = (err as Error).message;
-      if (message.toLowerCase().includes("not found")) {
+      const normalized = message.toLowerCase();
+      const missingAccount = normalized.includes("not found") || normalized.includes("404");
+
+      if (missingAccount && options?.autoCreateIfMissing) {
+        try {
+          const created = await withTimeout(
+            paperTradingService.createAccount(token),
+            ACCOUNT_INIT_TIMEOUT_MS,
+            "Timed out while creating demo account.",
+          );
+          setPaperAccount(created);
+          setAccountMissing(false);
+          setError(null);
+          return;
+        } catch (createError) {
+          setAccountMissing(true);
+          setPaperAccount(null);
+          setError((createError as Error).message);
+          return;
+        }
+      }
+
+      if (missingAccount) {
         setAccountMissing(true);
         setPaperAccount(null);
         setError(null);
@@ -544,7 +594,7 @@ function DemoTradingPageContent() {
     }
 
     setLoading(true);
-    void refreshAccount();
+    void refreshAccount({ autoCreateIfMissing: true });
   }, [isAuthenticated, isBootstrapping]);
 
   useEffect(() => {
@@ -729,7 +779,7 @@ function DemoTradingPageContent() {
     return { label: `RISK: LOW (${distancePercent.toFixed(2)}%)`, className: "text-emerald-300" };
   }
 
-  if (isBootstrapping || loading) {
+  if (isBootstrapping || (loading && !paperAccount && !accountMissing)) {
     return <LoadingState label="Loading demo trading desk" />;
   }
 
