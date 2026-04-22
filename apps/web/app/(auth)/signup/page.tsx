@@ -35,12 +35,13 @@ type FormErrors = Partial<Record<keyof SignupFormData, string>>;
 
 const API_UNAVAILABLE_MESSAGE =
   "Live account features are temporarily unavailable. Public preview remains available.";
+const SIGNUP_API_PATH = "/auth/signup";
 
 function isPotentialNetworkErrorMessage(message: string) {
   return /failed to fetch|networkerror|load failed|timeout|unreachable|temporarily unavailable|public preview remains available/i.test(message);
 }
 
-function resolveSignupErrorMessage(error: unknown) {
+function resolveSignupSubmitErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
 
   if (/already in use|already exists|conflict|409/i.test(message)) {
@@ -69,7 +70,8 @@ export default function SignupPage() {
     confirmPassword: "",
   });
   const [fieldErrors, setFieldErrors] = useState<FormErrors>({});
-  const [formError, setFormError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isApiUnavailable, setIsApiUnavailable] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -78,6 +80,12 @@ export default function SignupPage() {
       router.refresh();
     }
   }, [isAuthenticated, isBootstrapping, router]);
+
+  useEffect(() => {
+    // Always start from a clean availability state on mount.
+    setIsApiUnavailable(false);
+    setSubmitError(null);
+  }, []);
 
   function validate(data: SignupFormData): FormErrors {
     const parsed = signupSchema.safeParse(data);
@@ -101,7 +109,15 @@ export default function SignupPage() {
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (loading) return;
-    setFormError(null);
+    setSubmitError(null);
+    setIsApiUnavailable(false);
+
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[signup] submit attempt", {
+        resolvedApiBaseUrl: resolvedPublicApiBaseUrl,
+        signupPath: SIGNUP_API_PATH,
+      });
+    }
 
     const errors = validate(formData);
     setFieldErrors(errors);
@@ -119,6 +135,8 @@ export default function SignupPage() {
         password: formData.password,
       });
 
+      setIsApiUnavailable(false);
+      setSubmitError(null);
       router.replace("/");
       router.refresh();
     } catch (error) {
@@ -131,7 +149,8 @@ export default function SignupPage() {
         if (process.env.NODE_ENV !== "production") {
           console.info("[signup] health recheck result", {
             resolvedApiBaseUrl: resolvedPublicApiBaseUrl,
-            signupPath: "/auth/signup",
+            signupPath: SIGNUP_API_PATH,
+            rawMessage,
             reachable: reachability.reachable,
             healthUrl: reachability.url,
             status: reachability.status,
@@ -141,15 +160,19 @@ export default function SignupPage() {
         }
 
         if (!reachability.reachable) {
-          setFormError(API_UNAVAILABLE_MESSAGE);
+          setIsApiUnavailable(true);
+          setSubmitError(null);
           return;
         }
 
-        setFormError("We could not complete sign up right now. Please try again.");
-        return;
+        // Health is reachable: never keep unavailable banner latched.
+        setIsApiUnavailable(false);
+        setSubmitError("We could not complete sign up right now. Please try again.");
+      } else {
+        // Normal backend/validation/conflict errors should never toggle unavailable state.
+        setIsApiUnavailable(false);
+        setSubmitError(resolveSignupSubmitErrorMessage(error));
       }
-
-      setFormError(resolveSignupErrorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -226,7 +249,8 @@ export default function SignupPage() {
           <FieldError message={fieldErrors.confirmPassword} />
         </div>
 
-        {formError ? <Alert variant="error">{formError}</Alert> : null}
+        {isApiUnavailable ? <Alert variant="error">{API_UNAVAILABLE_MESSAGE}</Alert> : null}
+        {submitError && !isApiUnavailable ? <Alert variant="error">{submitError}</Alert> : null}
 
         <Button className="w-full" type="submit" disabled={loading}>
           {loading ? "Creating account..." : "Create account"}
