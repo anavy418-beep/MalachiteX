@@ -1,15 +1,19 @@
 import { io } from "socket.io-client";
 import { apiRequest } from "@/lib/api";
+import {
+  resolvedPublicApiBaseUrl,
+  resolvedPublicApiSocketUrl,
+} from "@/lib/runtime-config";
 
 export const MARKET_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"] as const;
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+const API_BASE_URL = resolvedPublicApiBaseUrl;
 
 if (!API_BASE_URL && process.env.NODE_ENV === "production") {
-  throw new Error("NEXT_PUBLIC_API_BASE_URL must be configured in production.");
+  throw new Error("NEXT_PUBLIC_API_BASE_URL or NEXT_PUBLIC_API_URL must be configured in production.");
 }
 
 const RESOLVED_API_BASE_URL = API_BASE_URL || "http://localhost:4000/api";
-const API_SOCKET_URL = process.env.NEXT_PUBLIC_API_SOCKET_URL ?? "";
+const API_SOCKET_URL = resolvedPublicApiSocketUrl;
 const KNOWN_QUOTES = ["USDT", "USDC", "BTC", "ETH", "BNB", "TRY", "EUR", "GBP"] as const;
 const DEFAULT_ORDER_BOOK_LIMIT = 20;
 const ALLOWED_ORDER_BOOK_LIMITS = [5, 10, 20, 50, 100, 500, 1000] as const;

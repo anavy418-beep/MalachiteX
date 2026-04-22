@@ -14,6 +14,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { tokenStore } from "@/lib/api";
+import { resolvedPublicApiSocketUrl } from "@/lib/runtime-config";
 import { friendlyErrorMessage } from "@/lib/errors";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import { normalizeTradeStatus, type CanonicalTradeStatus, tradeStatusLabel } from "@/lib/status";
@@ -24,10 +25,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadingState } from "@/components/ui/loading-state";
 
-const API_SOCKET_URL = process.env.NEXT_PUBLIC_API_SOCKET_URL ?? "";
+const API_SOCKET_URL = resolvedPublicApiSocketUrl;
 
 if (!API_SOCKET_URL && process.env.NODE_ENV === "production") {
-  throw new Error("NEXT_PUBLIC_API_SOCKET_URL must be configured in production.");
+  throw new Error(
+    "NEXT_PUBLIC_API_SOCKET_URL or NEXT_PUBLIC_API_BASE_URL/NEXT_PUBLIC_API_URL must be configured in production.",
+  );
 }
 
 const RESOLVED_API_SOCKET_URL = API_SOCKET_URL || "http://localhost:4000";

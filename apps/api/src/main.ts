@@ -7,6 +7,17 @@ import { join } from "node:path";
 import { ApiExceptionFilter } from "./common/filters/api-exception.filter";
 import { AppModule } from "./app.module";
 
+function normalizeOrigin(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    return trimmed.replace(/\/+$/, "");
+  }
+}
+
 async function bootstrap() {
   const rawCorsOrigins =
     process.env.CORS_ORIGIN ??
@@ -15,16 +26,30 @@ async function bootstrap() {
 
   const allowedOrigins = rawCorsOrigins
     .split(",")
-    .map((origin) => origin.trim())
+    .map((origin) => normalizeOrigin(origin))
     .filter(Boolean);
+
+  const vercelOrigin = process.env.VERCEL_URL
+    ? normalizeOrigin(`https://${process.env.VERCEL_URL}`)
+    : "";
+
+  const allowedOriginSet = new Set(
+    vercelOrigin ? [...allowedOrigins, vercelOrigin] : allowedOrigins,
+  );
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     cors: {
       origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (!origin) {
           callback(null, true);
           return;
         }
+
+        if (allowedOriginSet.has(normalizeOrigin(origin))) {
+          callback(null, true);
+          return;
+        }
+
         callback(new Error("CORS origin blocked"), false);
       },
       credentials: true,

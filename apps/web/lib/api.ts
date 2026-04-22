@@ -3,11 +3,12 @@ import {
   SESSION_TOKEN_PLACEHOLDER,
 } from "./auth-constants";
 import { friendlyErrorMessage } from "./errors";
+import { resolvedPublicApiBaseUrl } from "./runtime-config";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+const API_BASE_URL = resolvedPublicApiBaseUrl;
 
 if (!API_BASE_URL && process.env.NODE_ENV === "production") {
-  throw new Error("NEXT_PUBLIC_API_BASE_URL must be configured in production.");
+  throw new Error("NEXT_PUBLIC_API_BASE_URL or NEXT_PUBLIC_API_URL must be configured in production.");
 }
 
 const RESOLVED_API_BASE_URL = API_BASE_URL || "http://localhost:4000/api";

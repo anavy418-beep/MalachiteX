@@ -6,8 +6,8 @@ export function friendlyErrorMessage(error: unknown, fallback = "Something went 
   if (/cannot get\s+\/api|market endpoint not found|upstream .* failed|request failed\s*\(/i.test(message)) {
     return "Live service is temporarily unavailable. Please try again shortly.";
   }
-  if (/failed to fetch|networkerror|load failed/i.test(message)) {
-    return "The demo API is not reachable right now. You can still browse the public preview screens.";
+  if (/failed to fetch|networkerror|load failed|cors origin blocked|health check timeout/i.test(message)) {
+    return "Live account features are temporarily unavailable. Public preview remains available.";
   }
   if (/unauthorized|401|session|token/i.test(message)) {
     return "Your session could not be verified. Please sign in again or use Try Demo.";

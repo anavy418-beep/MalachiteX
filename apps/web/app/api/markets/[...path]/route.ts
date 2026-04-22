@@ -16,6 +16,22 @@ function trimTrailingSlash(value: string) {
   return value.replace(/\/+$/, "");
 }
 
+function normalizeApiBase(value: string) {
+  const trimmed = trimTrailingSlash(value.trim());
+  if (!trimmed) return "";
+  if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return trimmed;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (!parsed.pathname || parsed.pathname === "/") {
+      parsed.pathname = "/api";
+    }
+    return trimTrailingSlash(parsed.toString());
+  } catch {
+    return trimmed;
+  }
+}
+
 function resolveMarketsUpstreamApiBaseUrl() {
   const explicitProxyBase =
     process.env.MARKETS_UPSTREAM_API_BASE_URL ??
@@ -23,12 +39,16 @@ function resolveMarketsUpstreamApiBaseUrl() {
     "";
 
   if (explicitProxyBase.trim().length > 0) {
-    return trimTrailingSlash(explicitProxyBase.trim());
+    return normalizeApiBase(explicitProxyBase);
   }
 
-  const publicApiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").trim();
+  const publicApiBase = (
+    process.env.NEXT_PUBLIC_API_BASE_URL ??
+    process.env.NEXT_PUBLIC_API_URL ??
+    ""
+  ).trim();
   if (publicApiBase.startsWith("http://") || publicApiBase.startsWith("https://")) {
-    return trimTrailingSlash(publicApiBase);
+    return normalizeApiBase(publicApiBase);
   }
 
   return DEFAULT_MARKETS_UPSTREAM_API_BASE_URL;
@@ -99,7 +119,7 @@ export async function GET(
     return buildErrorResponse(
       500,
       "Market proxy misconfiguration.",
-      "Proxy target resolves back to the same Next.js route. Set NEXT_PUBLIC_API_BASE_URL to an absolute backend API URL or set MARKETS_UPSTREAM_API_BASE_URL.",
+      "Proxy target resolves back to the same Next.js route. Set NEXT_PUBLIC_API_BASE_URL (or NEXT_PUBLIC_API_URL) to an absolute backend API URL or set MARKETS_UPSTREAM_API_BASE_URL.",
     );
   }
 

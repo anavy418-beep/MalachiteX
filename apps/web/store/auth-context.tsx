@@ -11,6 +11,7 @@ import {
 } from "react";
 import { tokenStore } from "@/lib/api";
 import { authService, type AuthUser, type LoginInput, type SignupInput } from "@/services/auth.service";
+import { apiHealthService } from "@/services/api-health.service";
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -40,8 +41,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const currentUser = await authService.getCurrentUser();
       setUser(currentUser);
       return currentUser;
-    } catch {
-      tokenStore.clear();
+    } catch (error) {
+      const reachability = await apiHealthService.checkReachability();
+      const authFailureLikely =
+        error instanceof Error &&
+        /(401|403|unauthorized|forbidden|invalid|session|token|jwt)/i.test(error.message);
+
+      if (authFailureLikely || reachability.reachable) {
+        tokenStore.clear();
+      }
       setUser(null);
       return null;
     }

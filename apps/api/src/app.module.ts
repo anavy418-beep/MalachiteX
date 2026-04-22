@@ -23,6 +23,7 @@ import { FilesModule } from "./modules/files/files.module";
 import { MarketsModule } from "./modules/markets/markets.module";
 import { PaperTradingModule } from "./modules/paper-trading/paper-trading.module";
 import { RedisModule } from "./modules/redis/redis.module";
+import { HealthModule } from "./modules/health/health.module";
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { RedisModule } from "./modules/redis/redis.module";
     FilesModule,
     MarketsModule,
     PaperTradingModule,
+    HealthModule,
   ],
   providers: [
     {

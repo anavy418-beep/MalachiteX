@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "nest start --watch",
-    "start": "node dist/src/main.js",
+    "start": "pnpm run start:prod",
+    "start:prod": "node dist/src/main.js",
     "start:dev": "nest start --watch",
     "prebuild": "prisma generate",
     "build": "tsc -p tsconfig.build.json && tsc-alias -p tsconfig.build.json",

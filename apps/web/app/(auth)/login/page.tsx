@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
+import { apiHealthService } from "@/services/api-health.service";
 
 const loginSchema = z.object({
   email: z.string().trim().email("Enter a valid email"),
@@ -110,11 +111,19 @@ export default function LoginPage() {
       await login(DEMO_LOGIN);
       router.replace("/");
       router.refresh();
-    } catch {
+    } catch (error) {
       setFormData(DEMO_LOGIN);
-      setFormError(
-        "Demo login is ready, but the seeded API user is not reachable. Start the API and seed data, then try again.",
-      );
+      const reachability = await apiHealthService.checkReachability();
+      if (!reachability.reachable) {
+        setFormError("Live account features are temporarily unavailable. Public preview remains available.");
+      } else {
+        setFormError(
+          friendlyErrorMessage(
+            error,
+            "Demo login failed. Please confirm demo credentials are seeded on the API.",
+          ),
+        );
+      }
     } finally {
       setDemoLoading(false);
     }
