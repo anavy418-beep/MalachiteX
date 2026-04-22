@@ -18,11 +18,57 @@ function normalizeOrigin(value: string) {
   }
 }
 
+function toVercelProjectSlug(origin: string) {
+  try {
+    const hostname = new URL(origin).hostname.toLowerCase();
+    if (!hostname.endsWith(".vercel.app")) {
+      return "";
+    }
+
+    return hostname.replace(/\.vercel\.app$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function isAllowedVercelPreviewOrigin(origin: string, slugs: Set<string>) {
+  if (slugs.size === 0) {
+    return false;
+  }
+
+  try {
+    const hostname = new URL(origin).hostname.toLowerCase();
+    if (!hostname.endsWith(".vercel.app")) {
+      return false;
+    }
+
+    for (const slug of slugs) {
+      if (!slug) continue;
+      if (hostname === `${slug}.vercel.app` || hostname.startsWith(`${slug}-`)) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 async function bootstrap() {
+  const productionDefaultOrigins = [
+    "https://malachitex-web.vercel.app",
+    "https://xorviqa-web.vercel.app",
+  ];
+
   const rawCorsOrigins =
     process.env.CORS_ORIGIN ??
     process.env.FRONTEND_URL ??
-    "http://localhost:3000";
+    (
+      process.env.NODE_ENV === "production"
+        ? productionDefaultOrigins.join(",")
+        : "http://localhost:3000"
+    );
 
   const allowedOrigins = rawCorsOrigins
     .split(",")
@@ -35,6 +81,12 @@ async function bootstrap() {
 
   const allowedOriginSet = new Set(
     vercelOrigin ? [...allowedOrigins, vercelOrigin] : allowedOrigins,
+  );
+  const allowVercelPreviewOrigins = process.env.ALLOW_VERCEL_PREVIEW_ORIGINS !== "false";
+  const allowedVercelProjectSlugs = new Set(
+    [...allowedOriginSet]
+      .map((origin) => toVercelProjectSlug(origin))
+      .filter(Boolean),
   );
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -50,7 +102,15 @@ async function bootstrap() {
           return;
         }
 
-        callback(new Error("CORS origin blocked"), false);
+        if (
+          allowVercelPreviewOrigins &&
+          isAllowedVercelPreviewOrigin(normalizeOrigin(origin), allowedVercelProjectSlugs)
+        ) {
+          callback(null, true);
+          return;
+        }
+
+        callback(null, false);
       },
       credentials: true,
     },

@@ -1,8 +1,8 @@
 import { resolvedPublicApiBaseUrl, resolvedPublicApiSocketUrl } from "@/lib/runtime-config";
 
-const HEALTH_RETRY_DELAY_MS = 450;
-const HEALTH_TIMEOUT_MS = 3500;
-const DEFAULT_ATTEMPTS = 3;
+const HEALTH_RETRY_DELAY_MS = 900;
+const HEALTH_TIMEOUT_MS = 8000;
+const DEFAULT_ATTEMPTS = 5;
 
 const shouldDebugLog =
   process.env.NODE_ENV !== "production" ||
@@ -73,7 +73,7 @@ export const apiHealthService = {
           fetch(healthUrl, {
             method: "GET",
             cache: "no-store",
-            credentials: "include",
+            credentials: "omit",
             headers: { Accept: "application/json" },
           }),
           HEALTH_TIMEOUT_MS,
@@ -121,7 +121,7 @@ export const apiHealthService = {
       }
 
       if (attempt < maxAttempts) {
-        await sleep(HEALTH_RETRY_DELAY_MS * attempt);
+        await sleep(Math.min(HEALTH_RETRY_DELAY_MS * attempt, 4_000));
       }
     }
 

@@ -128,6 +128,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const headers = new Headers(options.headers ?? {});
   const authToken =
     options.token && options.token !== SESSION_TOKEN_PLACEHOLDER ? options.token : null;
+  const requestUrl = `${RESOLVED_API_BASE_URL}${path}`;
 
   if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
@@ -137,12 +138,22 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     headers.set("Authorization", `Bearer ${authToken}`);
   }
 
-  const response = await fetch(`${RESOLVED_API_BASE_URL}${path}`, {
-    ...options,
-    headers,
-    cache: "no-store",
-    credentials: "include",
-  });
+  let response: Response;
+  try {
+    response = await fetch(requestUrl, {
+      ...options,
+      headers,
+      cache: "no-store",
+      credentials: "include",
+    });
+  } catch (error) {
+    const networkError = error instanceof Error ? error : new Error(String(error));
+    Object.assign(networkError as Error & { status?: number; url?: string }, {
+      status: 0,
+      url: requestUrl,
+    });
+    throw networkError;
+  }
 
   if (
     response.status === 401 &&
@@ -171,7 +182,15 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
         ? String((payload as { message?: unknown }).message ?? "Request failed")
         : "Request failed";
 
-    throw new Error(friendlyErrorMessage(errorMessage));
+    const apiError = new Error(friendlyErrorMessage(errorMessage)) as Error & {
+      status?: number;
+      url?: string;
+      rawMessage?: string;
+    };
+    apiError.status = response.status;
+    apiError.url = requestUrl;
+    apiError.rawMessage = errorMessage;
+    throw apiError;
   }
 
   return unwrapData<T>(payload);

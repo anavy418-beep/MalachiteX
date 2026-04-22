@@ -35,6 +35,11 @@ type FormErrors = Partial<Record<keyof SignupFormData, string>>;
 const SIGNUP_API_PATH = "/auth/signup";
 const SIGNUP_UNAVAILABLE_MESSAGE =
   "Unable to connect to live account services right now. Please try again shortly.";
+const SIGNUP_RETRY_DELAY_MS = 1_200;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function isPotentialNetworkErrorMessage(message: string) {
   return /failed to fetch|networkerror|load failed|timeout|unreachable|temporarily unavailable|public preview remains available/i.test(message);
@@ -87,6 +92,7 @@ export default function SignupPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isApiUnavailable, setIsApiUnavailable] = useState(false);
   const [loading, setLoading] = useState(false);
+  const signupUrl = `${resolvedPublicApiBaseUrl}${SIGNUP_API_PATH}`;
 
   useEffect(() => {
     if (!isBootstrapping && isAuthenticated) {
@@ -136,6 +142,7 @@ export default function SignupPage() {
     if (process.env.NODE_ENV !== "production") {
       console.info("[signup] submit attempt", {
         resolvedApiBaseUrl: resolvedPublicApiBaseUrl,
+        signupUrl,
         signupPath: SIGNUP_API_PATH,
       });
     }
@@ -150,26 +157,71 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
-      await signup({
+      const submitPayload = {
         fullName: formData.fullName,
         email: formData.email,
         password: formData.password,
-      });
+      };
+
+      await signup(submitPayload);
 
       setIsApiUnavailable(false);
       setSubmitError(null);
       router.replace("/");
       router.refresh();
     } catch (error) {
-      const rawMessage = error instanceof Error ? error.message : String(error ?? "");
+      let currentError = error;
+      let rawMessage = currentError instanceof Error ? currentError.message : String(currentError ?? "");
+      const errorMeta = currentError as Error & {
+        status?: number;
+        url?: string;
+        rawMessage?: string;
+      };
+
+      if (isPotentialNetworkErrorMessage(rawMessage)) {
+        // Railway cold starts can cause transient network failures. Retry signup once before health probe.
+        await sleep(SIGNUP_RETRY_DELAY_MS);
+
+        try {
+          await signup({
+            fullName: formData.fullName,
+            email: formData.email,
+            password: formData.password,
+          });
+
+          setIsApiUnavailable(false);
+          setSubmitError(null);
+          router.replace("/");
+          router.refresh();
+          return;
+        } catch (retryError) {
+          currentError = retryError;
+          rawMessage =
+            retryError instanceof Error ? retryError.message : String(retryError ?? "");
+        }
+      }
 
       // Only show API-unavailable banner when health check fails after retries.
       if (isPotentialNetworkErrorMessage(rawMessage)) {
-        const reachability = await apiHealthService.checkReachability(3);
+        const reachability = await apiHealthService.checkReachability();
+
+        console.warn("[signup] network-like failure after retry", {
+          resolvedApiBaseUrl: resolvedPublicApiBaseUrl,
+          signupUrl,
+          signupRequestUrl: errorMeta.url,
+          signupStatus: errorMeta.status,
+          signupRawMessage: errorMeta.rawMessage,
+          healthUrl: reachability.url,
+          healthReachable: reachability.reachable,
+          healthStatus: reachability.status,
+          healthReason: reachability.reason,
+          attempts: reachability.attempts,
+        });
 
         if (process.env.NODE_ENV !== "production") {
           console.info("[signup] health recheck result", {
             resolvedApiBaseUrl: resolvedPublicApiBaseUrl,
+            signupUrl,
             signupPath: SIGNUP_API_PATH,
             rawMessage,
             reachable: reachability.reachable,
@@ -186,6 +238,7 @@ export default function SignupPage() {
 
           if (process.env.NODE_ENV !== "production") {
             console.info("[signup] unavailable=true", {
+              signupUrl,
               reason: reachability.reason,
               attempts: reachability.attempts,
             });
@@ -200,7 +253,16 @@ export default function SignupPage() {
       } else {
         // Normal backend/validation/conflict errors should never toggle unavailable state.
         setIsApiUnavailable(false);
-        setSubmitError(resolveSignupSubmitErrorMessage(error));
+        console.warn("[signup] backend submit error", {
+          resolvedApiBaseUrl: resolvedPublicApiBaseUrl,
+          signupUrl,
+          signupRequestUrl: errorMeta.url,
+          signupStatus: errorMeta.status,
+          signupRawMessage: errorMeta.rawMessage,
+          message: rawMessage,
+          classification: "backend-validation-or-conflict",
+        });
+        setSubmitError(resolveSignupSubmitErrorMessage(currentError));
       }
     } finally {
       setLoading(false);
