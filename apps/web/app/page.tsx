@@ -603,9 +603,6 @@ export default function HomePage() {
             <p className="text-2xl font-semibold text-white">Xorviqa</p>
             <p className="mt-1 text-[11px] uppercase tracking-[0.2em] text-emerald-300/85">Trade Without Borders</p>
             <p className="mt-2 text-sm text-slate-400">Premium crypto P2P ecosystem for secure global settlement.</p>
-            <p className="mt-3 text-xs text-slate-500">
-              Powered by <span className="font-medium text-slate-400">Malachite Technologies</span>
-            </p>
           </div>
           {footerColumns.map((column) => (
             <div key={column.heading} className="space-y-2">
@@ -613,6 +610,12 @@ export default function HomePage() {
               <div className="space-y-1.5">{column.links.map((link) => <p key={link} className="text-sm text-slate-400 transition hover:text-emerald-300">{link}</p>)}</div>
             </div>
           ))}
+        </div>
+        <div className="mt-6 w-full border-t border-zinc-800/80 pt-5 text-center">
+          <p className="text-xs text-slate-500">&copy; 2026 Xorviqa. All rights reserved.</p>
+          <p className="mt-2 text-xs text-slate-500">
+            Powered by <span className="font-medium text-slate-400">Malachite Technologies</span>
+          </p>
         </div>
       </footer>
     </div>
