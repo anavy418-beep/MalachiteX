@@ -11,6 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
 import { friendlyErrorMessage } from "@/lib/errors";
+import { resolvedPublicApiBaseUrl } from "@/lib/runtime-config";
+import { apiHealthService } from "@/services/api-health.service";
 
 const signupSchema = z
   .object({
@@ -31,6 +33,13 @@ const signupSchema = z
 type SignupFormData = z.infer<typeof signupSchema>;
 type FormErrors = Partial<Record<keyof SignupFormData, string>>;
 
+const API_UNAVAILABLE_MESSAGE =
+  "Live account features are temporarily unavailable. Public preview remains available.";
+
+function isPotentialNetworkErrorMessage(message: string) {
+  return /failed to fetch|networkerror|load failed|timeout|unreachable|temporarily unavailable|public preview remains available/i.test(message);
+}
+
 function resolveSignupErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
 
@@ -38,8 +47,12 @@ function resolveSignupErrorMessage(error: unknown) {
     return "An account with this email already exists. Please sign in instead.";
   }
 
-  if (/failed to fetch|networkerror|load failed|timeout|unreachable/i.test(message)) {
-    return "We could not reach live account services right now. Please try again in a moment.";
+  if (/password|weak/i.test(message)) {
+    return "Please use a stronger password (at least 8 characters, one uppercase, and one number).";
+  }
+
+  if (/validation|invalid|bad request|400/i.test(message)) {
+    return "Please review your details and try again.";
   }
 
   return friendlyErrorMessage(error, "Unable to create your account right now.");
@@ -109,6 +122,33 @@ export default function SignupPage() {
       router.replace("/");
       router.refresh();
     } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : String(error ?? "");
+
+      // Only show API-unavailable banner when health check fails after retries.
+      if (isPotentialNetworkErrorMessage(rawMessage)) {
+        const reachability = await apiHealthService.checkReachability(3);
+
+        if (process.env.NODE_ENV !== "production") {
+          console.info("[signup] health recheck result", {
+            resolvedApiBaseUrl: resolvedPublicApiBaseUrl,
+            signupPath: "/auth/signup",
+            reachable: reachability.reachable,
+            healthUrl: reachability.url,
+            status: reachability.status,
+            reason: reachability.reason,
+            attempts: reachability.attempts,
+          });
+        }
+
+        if (!reachability.reachable) {
+          setFormError(API_UNAVAILABLE_MESSAGE);
+          return;
+        }
+
+        setFormError("We could not complete sign up right now. Please try again.");
+        return;
+      }
+
       setFormError(resolveSignupErrorMessage(error));
     } finally {
       setLoading(false);
