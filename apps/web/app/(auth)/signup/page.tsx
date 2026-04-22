@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
-import { friendlyErrorMessage } from "@/lib/errors";
 import { resolvedPublicApiBaseUrl } from "@/lib/runtime-config";
 import { apiHealthService } from "@/services/api-health.service";
 
@@ -33,16 +32,17 @@ const signupSchema = z
 type SignupFormData = z.infer<typeof signupSchema>;
 type FormErrors = Partial<Record<keyof SignupFormData, string>>;
 
-const API_UNAVAILABLE_MESSAGE =
-  "Live account features are temporarily unavailable. Public preview remains available.";
 const SIGNUP_API_PATH = "/auth/signup";
+const SIGNUP_UNAVAILABLE_MESSAGE =
+  "Unable to connect to live account services right now. Please try again shortly.";
 
 function isPotentialNetworkErrorMessage(message: string) {
   return /failed to fetch|networkerror|load failed|timeout|unreachable|temporarily unavailable|public preview remains available/i.test(message);
 }
 
 function resolveSignupSubmitErrorMessage(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error ?? "");
+  const rawMessage = error instanceof Error ? error.message : String(error ?? "");
+  const message = rawMessage.trim();
 
   if (/already in use|already exists|conflict|409/i.test(message)) {
     return "An account with this email already exists. Please sign in instead.";
@@ -56,7 +56,21 @@ function resolveSignupSubmitErrorMessage(error: unknown) {
     return "Please review your details and try again.";
   }
 
-  return friendlyErrorMessage(error, "Unable to create your account right now.");
+  if (
+    /temporarily unavailable|public preview remains available|failed to fetch|networkerror|load failed|timeout|unreachable|cors origin blocked|health check timeout/i.test(
+      message,
+    )
+  ) {
+    return SIGNUP_UNAVAILABLE_MESSAGE;
+  }
+
+  if (!message) {
+    return "Unable to create your account right now.";
+  }
+
+  return message.length > 180
+    ? "Unable to create your account right now."
+    : message;
 }
 
 export default function SignupPage() {
@@ -85,6 +99,13 @@ export default function SignupPage() {
     // Always start from a clean availability state on mount.
     setIsApiUnavailable(false);
     setSubmitError(null);
+
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[signup] mounted", {
+        resolvedApiBaseUrl: resolvedPublicApiBaseUrl,
+        signupPath: SIGNUP_API_PATH,
+      });
+    }
   }, []);
 
   function validate(data: SignupFormData): FormErrors {
@@ -161,7 +182,15 @@ export default function SignupPage() {
 
         if (!reachability.reachable) {
           setIsApiUnavailable(true);
-          setSubmitError(null);
+          setSubmitError(SIGNUP_UNAVAILABLE_MESSAGE);
+
+          if (process.env.NODE_ENV !== "production") {
+            console.info("[signup] unavailable=true", {
+              reason: reachability.reason,
+              attempts: reachability.attempts,
+            });
+          }
+
           return;
         }
 
@@ -249,8 +278,10 @@ export default function SignupPage() {
           <FieldError message={fieldErrors.confirmPassword} />
         </div>
 
-        {isApiUnavailable ? <Alert variant="error">{API_UNAVAILABLE_MESSAGE}</Alert> : null}
-        {submitError && !isApiUnavailable ? <Alert variant="error">{submitError}</Alert> : null}
+        {submitError ? <Alert variant="error">{submitError}</Alert> : null}
+        {process.env.NODE_ENV !== "production" ? (
+          <p className="text-xs text-zinc-500">signup-debug: unavailable={String(isApiUnavailable)}</p>
+        ) : null}
 
         <Button className="w-full" type="submit" disabled={loading}>
           {loading ? "Creating account..." : "Create account"}
