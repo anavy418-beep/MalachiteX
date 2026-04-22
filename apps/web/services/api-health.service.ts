@@ -1,7 +1,12 @@
-import { resolvedPublicApiBaseUrl } from "@/lib/runtime-config";
+import { resolvedPublicApiBaseUrl, resolvedPublicApiSocketUrl } from "@/lib/runtime-config";
 
-const HEALTH_RETRY_DELAY_MS = 350;
+const HEALTH_RETRY_DELAY_MS = 450;
 const HEALTH_TIMEOUT_MS = 3500;
+const DEFAULT_ATTEMPTS = 3;
+
+const shouldDebugLog =
+  process.env.NODE_ENV !== "production" ||
+  process.env.NEXT_PUBLIC_DEBUG_API_HEALTH === "true";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -16,29 +21,31 @@ function withTimeout(input: Promise<Response>, timeoutMs: number) {
   ]);
 }
 
-function buildHealthCandidates() {
-  const fallbackBase = "http://localhost:4000/api";
-  const apiBase = resolvedPublicApiBaseUrl || fallbackBase;
-  const candidates = new Set<string>();
-
+function resolveHealthUrl() {
+  const baseCandidate = resolvedPublicApiBaseUrl || resolvedPublicApiSocketUrl;
   try {
-    const baseUrl = new URL(apiBase);
+    const baseUrl = new URL(baseCandidate);
     const normalizedPath = baseUrl.pathname.replace(/\/+$/, "");
-    const isApiPath = normalizedPath === "/api" || normalizedPath.endsWith("/api");
-
-    if (isApiPath) {
-      candidates.add(`${baseUrl.origin}${normalizedPath}/health`);
-    } else {
-      candidates.add(`${baseUrl.origin}${normalizedPath}/health`);
-      candidates.add(`${baseUrl.origin}/api/health`);
+    if (normalizedPath === "/api" || normalizedPath.endsWith("/api")) {
+      return `${baseUrl.origin}${normalizedPath}/health`;
     }
-    candidates.add(`${baseUrl.origin}/health`);
+    return `${baseUrl.origin}/api/health`;
   } catch {
-    candidates.add(`${fallbackBase}/health`);
-    candidates.add("http://localhost:4000/health");
-  }
+    if (process.env.NODE_ENV === "production") {
+      return "https://api-production-60fa.up.railway.app/api/health";
+    }
 
-  return [...candidates];
+    return "http://localhost:4000/api/health";
+  }
+}
+
+function debugLog(message: string, payload?: Record<string, unknown>) {
+  if (!shouldDebugLog) return;
+  if (payload) {
+    console.info(`[api-health] ${message}`, payload);
+    return;
+  }
+  console.info(`[api-health] ${message}`);
 }
 
 export type ApiHealthResult = {
@@ -46,39 +53,71 @@ export type ApiHealthResult = {
   status?: number;
   url?: string;
   reason?: string;
+  attempts?: number;
 };
 
 export const apiHealthService = {
-  async checkReachability(maxAttempts = 2): Promise<ApiHealthResult> {
-    const healthUrls = buildHealthCandidates();
+  async checkReachability(maxAttempts = DEFAULT_ATTEMPTS): Promise<ApiHealthResult> {
+    const healthUrl = resolveHealthUrl();
     let lastReason = "unreachable";
 
+    debugLog("starting reachability check", {
+      resolvedApiBaseUrl: resolvedPublicApiBaseUrl,
+      healthUrl,
+      maxAttempts,
+    });
+
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      for (const url of healthUrls) {
-        try {
-          const response = await withTimeout(
-            fetch(url, {
-              method: "GET",
-              cache: "no-store",
-              credentials: "include",
-              headers: { Accept: "application/json" },
-            }),
-            HEALTH_TIMEOUT_MS,
-          );
+      try {
+        const response = await withTimeout(
+          fetch(healthUrl, {
+            method: "GET",
+            cache: "no-store",
+            credentials: "include",
+            headers: { Accept: "application/json" },
+          }),
+          HEALTH_TIMEOUT_MS,
+        );
 
-          // 401/403/429 still prove the API host is reachable.
-          if (response.ok || response.status === 401 || response.status === 403 || response.status === 429) {
-            return {
-              reachable: true,
-              status: response.status,
-              url,
-            };
-          }
+        debugLog("health response received", {
+          attempt,
+          status: response.status,
+          url: healthUrl,
+        });
 
-          lastReason = `status-${response.status}`;
-        } catch (error) {
-          lastReason = error instanceof Error ? error.message : "network-error";
+        if (response.status === 401 || response.status === 403 || response.status === 429) {
+          return {
+            reachable: true,
+            status: response.status,
+            url: healthUrl,
+            attempts: attempt,
+          };
         }
+
+        let parsedJson: unknown = null;
+        try {
+          parsedJson = await response.clone().json();
+        } catch {
+          parsedJson = null;
+        }
+
+        if (response.ok || (parsedJson !== null && typeof parsedJson === "object")) {
+          return {
+            reachable: true,
+            status: response.status,
+            url: healthUrl,
+            attempts: attempt,
+          };
+        }
+
+        lastReason = `status-${response.status}`;
+      } catch (error) {
+        lastReason = error instanceof Error ? error.message : "network-error";
+        debugLog("health request failed", {
+          attempt,
+          url: healthUrl,
+          reason: lastReason,
+        });
       }
 
       if (attempt < maxAttempts) {
@@ -86,9 +125,17 @@ export const apiHealthService = {
       }
     }
 
+    debugLog("reachability failed after retries", {
+      healthUrl,
+      reason: lastReason,
+      attempts: maxAttempts,
+    });
+
     return {
       reachable: false,
+      url: healthUrl,
       reason: lastReason,
+      attempts: maxAttempts,
     };
   },
 };

@@ -113,7 +113,18 @@ export default function LoginPage() {
       router.refresh();
     } catch (error) {
       setFormData(DEMO_LOGIN);
-      const reachability = await apiHealthService.checkReachability();
+      const reachability = await apiHealthService.checkReachability(3);
+
+      if (process.env.NODE_ENV !== "production") {
+        console.info("[login] demo reachability result", {
+          reachable: reachability.reachable,
+          url: reachability.url,
+          status: reachability.status,
+          reason: reachability.reason,
+          attempts: reachability.attempts,
+        });
+      }
+
       if (!reachability.reachable) {
         setFormError("Live account features are temporarily unavailable. Public preview remains available.");
       } else {
