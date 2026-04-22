@@ -57,7 +57,7 @@ export default function ForgotPasswordPage() {
   return (
     <AuthShell
       title="Recover account access"
-      subtitle="Request a password reset token to recover your MalachiteX account."
+      subtitle="Request a password reset token to recover your Xorviqa account."
       footer={
         <p>
           Remembered your password?{" "}

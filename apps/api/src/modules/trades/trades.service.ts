@@ -75,7 +75,7 @@ export class TradesService {
         ? (offer.paymentDetails as Prisma.JsonObject)
         : {};
 
-    const fallbackReceiver = details.receiverName ?? "Verified Malachitex merchant";
+    const fallbackReceiver = details.receiverName ?? "Verified Xorviqa merchant";
 
     return {
       method: offer.paymentMethod,

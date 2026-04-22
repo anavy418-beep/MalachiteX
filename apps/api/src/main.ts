@@ -76,8 +76,8 @@ async function bootstrap() {
 
   if (enableSwagger) {
     const config = new DocumentBuilder()
-      .setTitle("Malachitex API")
-      .setDescription("Malachitex MVP API (demo-ready wallet + P2P platform)")
+      .setTitle("Xorviqa API")
+      .setDescription("Xorviqa MVP API (demo-ready wallet + P2P platform)")
       .setVersion("0.1.0")
       .addBearerAuth()
       .build();
@@ -90,9 +90,9 @@ async function bootstrap() {
   await app.listen(port, "0.0.0.0");
 
   const apiBase = await app.getUrl();
-  console.log(`[Malachitex API] listening at ${apiBase}/api`);
+  console.log(`[Xorviqa API] listening at ${apiBase}/api`);
   if (enableSwagger) {
-    console.log(`[Malachitex API] docs at ${apiBase}/api/docs`);
+    console.log(`[Xorviqa API] docs at ${apiBase}/api/docs`);
   }
 }
 

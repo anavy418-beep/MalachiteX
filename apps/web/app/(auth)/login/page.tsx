@@ -132,7 +132,7 @@ export default function LoginPage() {
   return (
     <AuthShell
       title="Welcome back"
-      subtitle="Sign in to MalachiteX to continue trading and manage your wallet workspace."
+      subtitle="Sign in to Xorviqa to continue trading and manage your wallet workspace."
       footer={
         <p>
           New to the platform?{" "}

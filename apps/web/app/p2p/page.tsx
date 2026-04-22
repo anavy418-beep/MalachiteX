@@ -351,7 +351,7 @@ export default function P2PPage() {
   return (
     <section className="space-y-6">
       <header className="space-y-2">
-        <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">MalachiteX P2P Desk</p>
+        <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Xorviqa P2P Desk</p>
         <h1 className="text-3xl font-semibold text-white">P2P Market</h1>
         <p className="text-sm text-slate-400">Premium exchange-style desk for fast peer-to-peer crypto trades.</p>
       </header>

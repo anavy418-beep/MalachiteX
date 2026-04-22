@@ -1262,7 +1262,7 @@ function DemoTradingPageContent() {
       <header className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">MalachiteX Paper Trading</p>
+            <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Xorviqa Paper Trading</p>
             <h1 className="text-3xl font-semibold text-white">Demo Trading Desk</h1>
           </div>
           <span

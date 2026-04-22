@@ -1,4 +1,4 @@
-﻿import * as bcrypt from "bcrypt";
+import * as bcrypt from "bcrypt";
 import {
   PrismaClient,
   Role,
@@ -174,7 +174,7 @@ async function seedWalletActivity(params: {
         walletId: params.walletId,
         userId: params.userId,
         amountMinor: demoWithdrawalAmount,
-        destination: "UPI: demo@malachitex",
+        destination: "UPI: demo@xorviqa",
         status: WithdrawalStatus.PENDING,
       },
     });

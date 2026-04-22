@@ -4,8 +4,8 @@ import { AppProviders } from "@/components/app-providers";
 import { Navbar } from "@/components/navbar";
 
 export const metadata: Metadata = {
-  title: "MalachiteX",
-  description: "MalachiteX - premium crypto wallet and P2P trading MVP",
+  title: "Xorviqa",
+  description: "Xorviqa - Trade Without Borders. Premium crypto wallet and P2P trading MVP.",
 };
 
 export default function RootLayout({

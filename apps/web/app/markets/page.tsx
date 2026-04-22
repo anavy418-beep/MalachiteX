@@ -912,7 +912,7 @@ function MarketsPageContent() {
   return (
     <section className="space-y-6">
       <header className="space-y-2">
-        <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">MalachiteX Markets</p>
+        <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Xorviqa Markets</p>
         <h1 className="text-3xl font-semibold text-white">Real-Time Markets</h1>
         <p className="text-sm text-slate-400">
           Live crypto prices, exchange-style charting, and a paper-trading feed layer designed to sit beside the current wallet and P2P flows.
@@ -1386,7 +1386,7 @@ export default function MarketsPage() {
     <Suspense
       fallback={
         <section className="space-y-2">
-          <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">MalachiteX Markets</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Xorviqa Markets</p>
           <p className="text-sm text-slate-400">Loading market workspace...</p>
         </section>
       }

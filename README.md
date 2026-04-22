@@ -1,4 +1,4 @@
-# Malachitex MVP
+# Xorviqa MVP
 
 Turbo-style monorepo for a demo-ready, semi-production, production-style MVP of a crypto wallet + P2P platform.
 

@@ -148,7 +148,7 @@ export default function WalletPage() {
   return (
     <section className="space-y-6">
       <header className="space-y-2">
-        <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">MalachiteX Wallet</p>
+        <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Xorviqa Wallet</p>
         <h1 className="text-3xl font-semibold text-white">Wallet Overview</h1>
         <p className="text-sm text-slate-400">Portfolio balances, deposit identity, and ledger visibility.</p>
       </header>

@@ -103,7 +103,7 @@ export default function ResetPasswordPage() {
   return (
     <AuthShell
       title="Set a new password"
-      subtitle="Use your reset token and set a strong new MalachiteX password."
+      subtitle="Use your reset token and set a strong new Xorviqa password."
       footer={
         <p>
           Need a new token?{" "}

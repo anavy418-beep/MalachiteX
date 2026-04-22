@@ -150,7 +150,7 @@ export class PaperTradingService implements OnModuleInit, OnModuleDestroy {
       await this.notifyPaperTrading(
         userId,
         "Demo trading ready",
-        "Your Malachitex paper trading account has been created.",
+        "Your Xorviqa paper trading account has been created.",
       );
     }
 

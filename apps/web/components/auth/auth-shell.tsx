@@ -22,20 +22,23 @@ export function AuthShell({
           <span className="relative h-4 w-14 shrink-0">
             <Image
               src="/brand/malachite-logo.png"
-              alt="MalachiteX logo"
+              alt="Xorviqa logo"
               fill
               sizes="56px"
               className="object-contain object-left"
             />
           </span>
           <ShieldCheck className="h-4 w-4" />
-          MalachiteX Secure Access
+          Xorviqa Secure Access
         </div>
         <h2 className="mt-6 text-3xl font-semibold leading-tight text-white">
           Trade and manage digital assets with a premium wallet and P2P experience.
         </h2>
         <p className="mt-4 text-sm text-slate-400">
-          Sign in to your MalachiteX workspace to monitor balances, activity, and P2P operations.
+          Sign in to your Xorviqa workspace to monitor balances, activity, and P2P operations.
+        </p>
+        <p className="mt-2 text-xs uppercase tracking-[0.18em] text-emerald-300/85">
+          Trade Without Borders
         </p>
         <div className="mt-8 grid gap-3 text-sm text-slate-300">
           <p>- Demo-ready wallet and portfolio views</p>
@@ -56,7 +59,7 @@ export function AuthShell({
       </Card>
 
       <p className="md:col-span-2 text-center text-xs text-slate-500">
-        By continuing, you agree to MalachiteX platform terms and responsible trading conduct.
+        By continuing, you agree to Xorviqa platform terms and responsible trading conduct.
         <Link className="ml-1 text-emerald-300 hover:text-emerald-200" href="/">
           Learn more
         </Link>

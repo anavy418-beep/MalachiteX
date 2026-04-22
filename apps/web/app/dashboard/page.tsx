@@ -382,7 +382,7 @@ export default function DashboardPage() {
   return (
     <section className="space-y-6">
       <header className="space-y-2">
-        <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">MalachiteX Console</p>
+        <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Xorviqa Console</p>
         <h1 className="text-3xl font-semibold text-white">Dashboard</h1>
         <p className="text-sm text-slate-400">Portfolio, wallet operations, P2P trade status, and marketplace signals.</p>
       </header>

@@ -49,12 +49,17 @@ export function Navbar() {
         <Link href="/" className="inline-flex items-center gap-3">
           <img
             src="/malachite-logo.png"
-            alt="MalachiteX Logo"
+            alt="Xorviqa Logo"
             className="h-10 w-10 shrink-0 object-contain [image-rendering:auto] drop-shadow-[0_0_10px_rgba(34,197,94,0.35)]"
           />
-          <span className="bg-gradient-to-r from-[#00FF88] via-emerald-400 to-[#00C853] bg-clip-text text-2xl font-bold tracking-wide text-transparent drop-shadow-[0_0_10px_rgba(0,255,120,0.6)] transition-all duration-300 hover:scale-105">
-            MalachiteX
-          </span>
+          <div className="flex flex-col leading-none">
+            <span className="bg-gradient-to-r from-[#00FF88] via-emerald-400 to-[#00C853] bg-clip-text text-2xl font-bold tracking-wide text-transparent drop-shadow-[0_0_10px_rgba(0,255,120,0.6)] transition-all duration-300 hover:scale-105">
+              Xorviqa
+            </span>
+            <span className="hidden text-[10px] uppercase tracking-[0.18em] text-emerald-300/75 xl:block">
+              Trade Without Borders
+            </span>
+          </div>
         </Link>
 
         <nav className="hidden items-center gap-1 md:flex">

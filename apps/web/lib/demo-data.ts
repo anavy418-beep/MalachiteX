@@ -111,7 +111,7 @@ export const DEMO_P2P_MERCHANTS: DemoMerchant[] = [
   },
   {
     id: "m3",
-    name: "Malachite Ambassador",
+    name: "Xorviqa Ambassador",
     avatar: "MA",
     badge: "AMBASSADOR",
     completionRate: 97,
@@ -336,7 +336,7 @@ export const DEMO_DASHBOARD_TRADES: DashboardTradePreview[] = [
   },
   {
     id: "demo-trade-3",
-    merchantName: "Malachite Ambassador",
+    merchantName: "Xorviqa Ambassador",
     side: "BUY",
     asset: "BTC",
     amountMinor: "320000",

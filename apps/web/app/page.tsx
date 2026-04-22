@@ -2,7 +2,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   BadgeCheck,
@@ -38,9 +38,22 @@ type MarketOverviewPair = {
   quoteVolume: string;
 };
 
+type MarketOverviewFlatRow = {
+  symbol?: string;
+  price?: number;
+  lastPrice?: string;
+  change24h?: number;
+  priceChangePercent?: string;
+  volume24h?: number;
+  quoteVolume?: string;
+};
+
 type MarketOverviewResponse = {
-  pairs?: MarketOverviewPair[];
+  pairs?: Array<MarketOverviewPair | MarketOverviewFlatRow>;
+  overview?: MarketOverviewFlatRow[];
   updatedAt?: number;
+  fallback?: boolean;
+  details?: string;
 };
 
 const OVERVIEW_SYMBOLS = [
@@ -158,6 +171,66 @@ function formatCompact(value: number) {
   }).format(value);
 }
 
+const COIN_ICON_MAP: Record<string, string> = {
+  BTC: "https://assets.coingecko.com/coins/images/1/large/bitcoin.png",
+  ETH: "https://assets.coingecko.com/coins/images/279/large/ethereum.png",
+  SOL: "https://assets.coingecko.com/coins/images/4128/large/solana.png",
+  BNB: "https://assets.coingecko.com/coins/images/825/large/bnb-icon2_2x.png",
+  XRP: "https://assets.coingecko.com/coins/images/44/large/xrp-symbol-white-128.png",
+  DOGE: "https://assets.coingecko.com/coins/images/5/large/dogecoin.png",
+  ADA: "https://assets.coingecko.com/coins/images/975/large/cardano.png",
+  AVAX: "https://assets.coingecko.com/coins/images/12559/large/Avalanche_Circle_RedWhite_Trans.png",
+  LINK: "https://assets.coingecko.com/coins/images/877/large/chainlink-new-logo.png",
+  TON: "https://assets.coingecko.com/coins/images/17980/large/ton_symbol.png",
+  TRX: "https://assets.coingecko.com/coins/images/1094/large/tron-logo.png",
+  LTC: "https://assets.coingecko.com/coins/images/2/large/litecoin.png",
+  BCH: "https://assets.coingecko.com/coins/images/780/large/bitcoin-cash-circle.png",
+  SHIB: "https://assets.coingecko.com/coins/images/11939/large/shiba.png",
+  DOT: "https://assets.coingecko.com/coins/images/12171/large/polkadot.png",
+  NEAR: "https://assets.coingecko.com/coins/images/10365/large/near.jpg",
+};
+
+function normalizeOverviewPair(raw: MarketOverviewPair | MarketOverviewFlatRow): MarketOverviewPair | null {
+  const symbol = String(raw.symbol ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  if (!symbol || symbol.length < 6) return null;
+
+  const rawPrice =
+    typeof (raw as MarketOverviewPair).lastPrice === "string"
+      ? (raw as MarketOverviewPair).lastPrice
+      : String((raw as MarketOverviewFlatRow).price ?? "0");
+  const rawChange =
+    typeof (raw as MarketOverviewPair).priceChangePercent === "string"
+      ? (raw as MarketOverviewPair).priceChangePercent
+      : String((raw as MarketOverviewFlatRow).change24h ?? "0");
+  const rawVolume =
+    typeof (raw as MarketOverviewPair).quoteVolume === "string"
+      ? (raw as MarketOverviewPair).quoteVolume
+      : String((raw as MarketOverviewFlatRow).volume24h ?? "0");
+
+  const price = parseNumeric(rawPrice);
+  if (!Number.isFinite(price) || price <= 0) return null;
+
+  return {
+    symbol,
+    displaySymbol: (raw as MarketOverviewPair).displaySymbol ?? toDisplayPair(symbol),
+    lastPrice: String(rawPrice),
+    priceChangePercent: String(rawChange),
+    quoteVolume: String(rawVolume),
+  };
+}
+
+function symbolBaseAsset(symbol: string) {
+  const label = toDisplayPair(symbol);
+  return label.includes("/") ? label.split("/")[0] : symbol.slice(0, 3);
+}
+
+function iconForSymbol(symbol: string) {
+  const base = symbolBaseAsset(symbol);
+  return COIN_ICON_MAP[base] ?? "/icons/coin-fallback.png";
+}
+
 export default function HomePage() {
   const [tradeSide, setTradeSide] = useState<"BUY" | "SELL">("BUY");
   const [asset, setAsset] = useState("USDT");
@@ -168,6 +241,7 @@ export default function HomePage() {
   const [marketLoading, setMarketLoading] = useState(true);
   const [marketError, setMarketError] = useState<string | null>(null);
   const [marketUpdatedAt, setMarketUpdatedAt] = useState<string | null>(null);
+  const hasLiveMarketSnapshotRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -182,20 +256,49 @@ export default function HomePage() {
         const payload = (await response.json()) as MarketOverviewResponse;
         if (!active) return;
 
-        setMarketPairs(Array.isArray(payload.pairs) ? payload.pairs : []);
-        setMarketUpdatedAt(typeof payload.updatedAt === "number" ? new Date(payload.updatedAt).toLocaleTimeString() : null);
-        setMarketError(null);
+        const rawPairs = Array.isArray(payload.pairs)
+          ? payload.pairs
+          : Array.isArray(payload.overview)
+            ? payload.overview
+            : [];
+        const normalizedPairs = rawPairs.map(normalizeOverviewPair).filter((pair): pair is MarketOverviewPair => Boolean(pair));
+        const isFallbackPayload = payload.fallback === true;
+
+        if (normalizedPairs.length > 0 && !isFallbackPayload) {
+          setMarketPairs(normalizedPairs);
+          hasLiveMarketSnapshotRef.current = true;
+        }
+
+        if (typeof payload.updatedAt === "number") {
+          setMarketUpdatedAt(new Date(payload.updatedAt).toLocaleTimeString());
+        } else {
+          setMarketUpdatedAt((current) => current ?? new Date().toLocaleTimeString());
+        }
+
+        if (isFallbackPayload) {
+          if (hasLiveMarketSnapshotRef.current) {
+            setMarketError("Using recent cached market snapshot. Live refresh will resume automatically.");
+          } else {
+            setMarketError("Live market preview is temporarily unavailable.");
+          }
+        } else {
+          setMarketError(null);
+        }
       } catch (error) {
         if (!active) return;
         console.error("Homepage market preview error:", error);
-        setMarketError("Live market feed is temporarily delayed.");
+        if (hasLiveMarketSnapshotRef.current) {
+          setMarketError("Using recent cached market snapshot. Live refresh will resume automatically.");
+        } else {
+          setMarketError("Live market preview is temporarily unavailable.");
+        }
       } finally {
         if (active) setMarketLoading(false);
       }
     };
 
     fetchOverview();
-    const interval = setInterval(fetchOverview, 60_000);
+    const interval = setInterval(fetchOverview, 45_000);
 
     return () => {
       active = false;
@@ -217,7 +320,11 @@ export default function HomePage() {
   );
   const trending = useMemo(
     () => [...marketPairs]
-      .sort((a, b) => Math.abs(parseNumeric(b.priceChangePercent)) - Math.abs(parseNumeric(a.priceChangePercent)))
+      .sort((a, b) => {
+        const aScore = Math.abs(parseNumeric(a.priceChangePercent)) * 100 + Math.log10(parseNumeric(a.quoteVolume) + 1);
+        const bScore = Math.abs(parseNumeric(b.priceChangePercent)) * 100 + Math.log10(parseNumeric(b.quoteVolume) + 1);
+        return bScore - aScore;
+      })
       .slice(0, 4),
     [marketPairs],
   );
@@ -237,8 +344,11 @@ export default function HomePage() {
             <h1 className="mt-5 max-w-4xl text-4xl font-semibold leading-tight text-white md:text-6xl">
               A premium crypto wallet, P2P escrow, and paper trading demo in one product.
             </h1>
+            <p className="mt-3 text-xs font-medium uppercase tracking-[0.24em] text-emerald-300/90 md:text-sm">
+              Trade Without Borders
+            </p>
             <p className="mt-5 max-w-2xl text-sm leading-6 text-slate-300 md:text-base">
-              MalachiteX is a portfolio-grade fintech MVP that shows secure auth, custodial wallet flows,
+              Xorviqa is a portfolio-grade fintech MVP that shows secure auth, custodial wallet flows,
               P2P payment proof, real-time markets, and simulated trading without real-money brokerage execution.
             </p>
 
@@ -355,7 +465,7 @@ export default function HomePage() {
       </section>
 
       <section className="space-y-4">
-        <div className="space-y-1"><p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Trust Layer</p><h2 className="text-2xl font-semibold text-white md:text-3xl">Why MalachiteX</h2></div>
+        <div className="space-y-1"><p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Trust Layer</p><h2 className="text-2xl font-semibold text-white md:text-3xl">Why Xorviqa</h2></div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {trustPoints.map((item) => {
             const Icon = item.icon;
@@ -405,7 +515,19 @@ export default function HomePage() {
                     return (
                       <div key={`${group.title}-${pair.symbol}`} className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2">
                         <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-medium text-slate-200">{pair.displaySymbol ?? toDisplayPair(pair.symbol)}</p>
+                          <div className="flex items-center gap-2">
+                            <img
+                              src={iconForSymbol(pair.symbol)}
+                              alt={`${pair.symbol} icon`}
+                              className="h-6 w-6 rounded-full object-contain"
+                              loading="lazy"
+                              onError={(event) => {
+                                event.currentTarget.onerror = null;
+                                event.currentTarget.src = "/icons/coin-fallback.png";
+                              }}
+                            />
+                            <p className="text-sm font-medium text-slate-200">{pair.displaySymbol ?? toDisplayPair(pair.symbol)}</p>
+                          </div>
                           <p className={`text-xs ${change >= 0 ? "text-emerald-300" : "text-red-300"}`}>{formatPercent(pair.priceChangePercent)}</p>
                         </div>
                         <div className="mt-1 flex items-center justify-between gap-2 text-xs text-slate-400"><span>{formatMarketPrice(pair.lastPrice)}</span><span>Vol {formatCompact(volume)}</span></div>
@@ -436,7 +558,7 @@ export default function HomePage() {
 
       <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
         <Card className="border-zinc-800 bg-gradient-to-br from-zinc-900/95 to-emerald-950/30">
-          <CardHeader><CardTitle className="text-2xl text-white">Earn with MalachiteX</CardTitle><CardDescription>Referral, partner, and merchant opportunities in one ecosystem.</CardDescription></CardHeader>
+          <CardHeader><CardTitle className="text-2xl text-white">Earn with Xorviqa</CardTitle><CardDescription>Referral, partner, and merchant opportunities in one ecosystem.</CardDescription></CardHeader>
           <CardContent className="grid gap-3">
             {partnerPrograms.map((program) => {
               const Icon = program.icon;
@@ -448,7 +570,7 @@ export default function HomePage() {
         <Card className="border-emerald-800/40 bg-emerald-950/15">
           <CardHeader><CardTitle className="text-2xl text-white">Mobile App Coming Soon</CardTitle><CardDescription>Trade, settle, and manage wallet from Android and iOS.</CardDescription></CardHeader>
           <CardContent className="space-y-5">
-            <div className="mx-auto w-full max-w-[250px] rounded-[2rem] border border-zinc-700 bg-zinc-950/80 p-4"><div className="rounded-[1.4rem] border border-emerald-900/40 bg-gradient-to-b from-emerald-950/30 to-zinc-950 p-3"><p className="text-xs uppercase tracking-wide text-emerald-200">MalachiteX App</p><div className="mt-3 space-y-2"><div className="h-8 rounded-lg bg-zinc-900/90" /><div className="h-8 rounded-lg bg-zinc-900/80" /><div className="h-8 rounded-lg bg-zinc-900/70" /></div></div></div>
+            <div className="mx-auto w-full max-w-[250px] rounded-[2rem] border border-zinc-700 bg-zinc-950/80 p-4"><div className="rounded-[1.4rem] border border-emerald-900/40 bg-gradient-to-b from-emerald-950/30 to-zinc-950 p-3"><p className="text-xs uppercase tracking-wide text-emerald-200">Xorviqa App</p><div className="mt-3 space-y-2"><div className="h-8 rounded-lg bg-zinc-900/90" /><div className="h-8 rounded-lg bg-zinc-900/80" /><div className="h-8 rounded-lg bg-zinc-900/70" /></div></div></div>
             <div className="grid gap-2 sm:grid-cols-2"><Button variant="outline" className="gap-2"><Smartphone className="h-4 w-4" />Android</Button><Button variant="outline" className="gap-2"><Smartphone className="h-4 w-4" />iOS</Button></div>
           </CardContent>
         </Card>
@@ -477,7 +599,7 @@ export default function HomePage() {
 
       <footer className="rounded-3xl border border-zinc-800 bg-zinc-950/70 p-6 md:p-8">
         <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-6">
-          <div className="xl:col-span-1"><p className="text-2xl font-semibold text-white">MalachiteX</p><p className="mt-2 text-sm text-slate-400">Premium crypto P2P ecosystem for secure global settlement.</p></div>
+          <div className="xl:col-span-1"><p className="text-2xl font-semibold text-white">Xorviqa</p><p className="mt-1 text-[11px] uppercase tracking-[0.2em] text-emerald-300/85">Trade Without Borders</p><p className="mt-2 text-sm text-slate-400">Premium crypto P2P ecosystem for secure global settlement.</p></div>
           {footerColumns.map((column) => (
             <div key={column.heading} className="space-y-2">
               <p className="text-sm font-semibold text-white">{column.heading}</p>

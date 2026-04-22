@@ -100,7 +100,7 @@ export default function SignupPage() {
 
   return (
     <AuthShell
-      title="Create your MalachiteX account"
+      title="Create your Xorviqa account"
       subtitle="Start with secure custody, wallet visibility, and P2P-ready workflows."
       footer={
         <p>
