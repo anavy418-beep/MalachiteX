@@ -599,7 +599,14 @@ export default function HomePage() {
 
       <footer className="rounded-3xl border border-zinc-800 bg-zinc-950/70 p-6 md:p-8">
         <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-6">
-          <div className="xl:col-span-1"><p className="text-2xl font-semibold text-white">Xorviqa</p><p className="mt-1 text-[11px] uppercase tracking-[0.2em] text-emerald-300/85">Trade Without Borders</p><p className="mt-2 text-sm text-slate-400">Premium crypto P2P ecosystem for secure global settlement.</p></div>
+          <div className="xl:col-span-1">
+            <p className="text-2xl font-semibold text-white">Xorviqa</p>
+            <p className="mt-1 text-[11px] uppercase tracking-[0.2em] text-emerald-300/85">Trade Without Borders</p>
+            <p className="mt-2 text-sm text-slate-400">Premium crypto P2P ecosystem for secure global settlement.</p>
+            <p className="mt-3 text-xs text-slate-500">
+              Powered by <span className="font-medium text-slate-400">Malachite Technologies</span>
+            </p>
+          </div>
           {footerColumns.map((column) => (
             <div key={column.heading} className="space-y-2">
               <p className="text-sm font-semibold text-white">{column.heading}</p>

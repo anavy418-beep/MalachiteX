@@ -1,4 +1,3 @@
-import Image from "next/image";
 import type { ReactNode } from "react";
 import { ShieldCheck } from "lucide-react";
 import Link from "next/link";
@@ -19,15 +18,6 @@ export function AuthShell({
     <div className="relative isolate mx-auto grid w-full max-w-5xl items-center gap-8 py-10 md:grid-cols-[1.1fr_1fr]">
       <section className="hidden rounded-2xl border border-emerald-900/30 bg-zinc-900/60 p-8 text-slate-200 md:block">
         <div className="inline-flex items-center gap-2 rounded-full border border-emerald-800/50 bg-emerald-950/40 px-3 py-1 text-xs text-emerald-200">
-          <span className="relative h-4 w-14 shrink-0">
-            <Image
-              src="/brand/malachite-logo.png"
-              alt="Xorviqa logo"
-              fill
-              sizes="56px"
-              className="object-contain object-left"
-            />
-          </span>
           <ShieldCheck className="h-4 w-4" />
           Xorviqa Secure Access
         </div>

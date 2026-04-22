@@ -46,17 +46,12 @@ export function Navbar() {
   return (
     <header className="sticky top-0 z-40 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur">
       <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4">
-        <Link href="/" className="inline-flex items-center gap-3">
-          <img
-            src="/malachite-logo.png"
-            alt="Xorviqa Logo"
-            className="h-10 w-10 shrink-0 object-contain [image-rendering:auto] drop-shadow-[0_0_10px_rgba(34,197,94,0.35)]"
-          />
+        <Link href="/" className="inline-flex items-center">
           <div className="flex flex-col leading-none">
-            <span className="bg-gradient-to-r from-[#00FF88] via-emerald-400 to-[#00C853] bg-clip-text text-2xl font-bold tracking-wide text-transparent drop-shadow-[0_0_10px_rgba(0,255,120,0.6)] transition-all duration-300 hover:scale-105">
+            <span className="text-2xl font-semibold tracking-[0.04em] text-emerald-300 drop-shadow-[0_0_8px_rgba(16,185,129,0.25)]">
               Xorviqa
             </span>
-            <span className="hidden text-[10px] uppercase tracking-[0.18em] text-emerald-300/75 xl:block">
+            <span className="hidden pt-0.5 text-[10px] uppercase tracking-[0.18em] text-emerald-300/70 xl:block">
               Trade Without Borders
             </span>
           </div>
