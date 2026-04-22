@@ -4,9 +4,29 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const BINANCE_REST_BASE_URL = "https://api.binance.com";
+const COINGECKO_MARKETS_BASE_URL = "https://api.coingecko.com/api/v3/coins/markets";
 const DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"];
 const MAX_SYMBOLS = 50;
 const KNOWN_QUOTES = ["USDT", "USDC", "BTC", "ETH", "BNB", "TRY", "EUR", "GBP"] as const;
+
+const SYMBOL_TO_COINGECKO_ID: Record<string, string> = {
+  BTCUSDT: "bitcoin",
+  ETHUSDT: "ethereum",
+  SOLUSDT: "solana",
+  BNBUSDT: "binancecoin",
+  XRPUSDT: "ripple",
+  DOGEUSDT: "dogecoin",
+  ADAUSDT: "cardano",
+  AVAXUSDT: "avalanche-2",
+  LINKUSDT: "chainlink",
+  TONUSDT: "the-open-network",
+  TRXUSDT: "tron",
+  LTCUSDT: "litecoin",
+  BCHUSDT: "bitcoin-cash",
+  SHIBUSDT: "shiba-inu",
+  DOTUSDT: "polkadot",
+  NEARUSDT: "near",
+};
 
 type Binance24HourTicker = {
   symbol: string;
@@ -44,9 +64,28 @@ type MarketTickerSnapshot = {
   openTime: number;
   closeTime: number;
   updatedAt: number;
-  source: "binance";
+  source: "binance" | "coingecko";
   streaming: boolean;
 };
+
+type CoinGeckoMarketsRow = {
+  id: string;
+  symbol: string;
+  current_price: number;
+  high_24h: number | null;
+  low_24h: number | null;
+  total_volume: number;
+  market_cap: number;
+  price_change_percentage_24h: number | null;
+};
+
+type CachedOverviewSnapshot = {
+  pairs: MarketTickerSnapshot[];
+  source: "binance" | "coingecko";
+  updatedAt: number;
+};
+
+let cachedOverviewSnapshot: CachedOverviewSnapshot | null = null;
 
 function buildErrorResponse(status: number, message: string, details: string) {
   return NextResponse.json(
@@ -141,51 +180,129 @@ function toSummaryRow(pair: MarketTickerSnapshot) {
   };
 }
 
-function buildFallbackOverview(symbols: string[]) {
-  const now = Date.now();
-  const pairs = symbols.map((symbol, index) => {
-    const { baseAsset, quoteAsset } = splitSymbol(symbol);
-    const price = (1000 + index * 37).toFixed(2);
+function buildOverviewPayload(input: {
+  pairs: MarketTickerSnapshot[];
+  source: "binance" | "coingecko";
+  updatedAt?: number;
+  fallback?: boolean;
+  details?: string;
+}) {
+  const updatedAt = input.updatedAt ?? Date.now();
+  const pairs = input.pairs.map((pair) => ({ ...pair, updatedAt }));
+  const movers = [...pairs].sort(
+    (left, right) => Number.parseFloat(right.priceChangePercent) - Number.parseFloat(left.priceChangePercent),
+  );
 
-    return {
+  return {
+    pairs,
+    topGainers: movers.slice(0, 5),
+    topLosers: [...movers].reverse().slice(0, 5),
+    overview: pairs.map(toSummaryRow),
+    source: input.source,
+    streaming: false,
+    updatedAt,
+    fallback: input.fallback ?? false,
+    details: input.details,
+  };
+}
+
+function getCachedOverview() {
+  if (!cachedOverviewSnapshot) return null;
+  return cachedOverviewSnapshot;
+}
+
+function rememberOverviewSnapshot(pairs: MarketTickerSnapshot[], source: "binance" | "coingecko", updatedAt: number) {
+  cachedOverviewSnapshot = { pairs, source, updatedAt };
+}
+
+function normalizeDecimal(value: number) {
+  if (!Number.isFinite(value)) return "0";
+  return value.toFixed(value >= 1 ? 2 : 6).replace(/0+$/, "").replace(/\.$/, "") || "0";
+}
+
+async function fetchCoinGeckoOverview(symbols: string[]) {
+  const coinIds = symbols
+    .map((symbol) => SYMBOL_TO_COINGECKO_ID[symbol])
+    .filter((id): id is string => Boolean(id));
+
+  if (coinIds.length === 0) {
+    return [] as MarketTickerSnapshot[];
+  }
+
+  const url = new URL(COINGECKO_MARKETS_BASE_URL);
+  url.searchParams.set("vs_currency", "usd");
+  url.searchParams.set("ids", [...new Set(coinIds)].join(","));
+  url.searchParams.set("order", "market_cap_desc");
+  url.searchParams.set("per_page", String(Math.max(coinIds.length, 20)));
+  url.searchParams.set("page", "1");
+  url.searchParams.set("sparkline", "false");
+  url.searchParams.set("price_change_percentage", "24h");
+
+  const response = await fetch(url.toString(), {
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`CoinGecko overview request failed (${response.status}): ${details.slice(0, 180)}`);
+  }
+
+  const payload = (await response.json()) as CoinGeckoMarketsRow[];
+  if (!Array.isArray(payload)) {
+    throw new Error("Unexpected CoinGecko overview payload shape.");
+  }
+
+  const byId = new Map(payload.map((entry) => [entry.id, entry]));
+  const now = Date.now();
+
+  return symbols.flatMap((symbol) => {
+    const coinId = SYMBOL_TO_COINGECKO_ID[symbol];
+    const coin = coinId ? byId.get(coinId) : undefined;
+    if (!coin || !Number.isFinite(coin.current_price) || coin.current_price <= 0) {
+      return [];
+    }
+
+    const { baseAsset, quoteAsset } = splitSymbol(symbol);
+    const changePercent = Number.isFinite(coin.price_change_percentage_24h ?? NaN)
+      ? Number(coin.price_change_percentage_24h)
+      : 0;
+    const priceChange = coin.current_price * (changePercent / 100);
+    const high = Number.isFinite(coin.high_24h ?? NaN) ? Number(coin.high_24h) : coin.current_price;
+    const low = Number.isFinite(coin.low_24h ?? NaN) ? Number(coin.low_24h) : coin.current_price;
+    const volumeQuote = Number.isFinite(coin.total_volume) ? coin.total_volume : 0;
+
+    return [{
       symbol,
       baseAsset,
       quoteAsset,
       displaySymbol: `${baseAsset}/${quoteAsset}`,
-      lastPrice: price,
-      openPrice: price,
-      highPrice: price,
-      lowPrice: price,
-      priceChange: "0.00",
-      priceChangePercent: "0.00",
-      volume: "0.00",
-      quoteVolume: "0.00",
-      bidPrice: price,
-      askPrice: price,
+      lastPrice: normalizeDecimal(coin.current_price),
+      openPrice: normalizeDecimal(coin.current_price - priceChange),
+      highPrice: normalizeDecimal(high),
+      lowPrice: normalizeDecimal(low),
+      priceChange: normalizeDecimal(priceChange),
+      priceChangePercent: normalizeDecimal(changePercent),
+      volume: normalizeDecimal(volumeQuote / Math.max(coin.current_price, 1)),
+      quoteVolume: normalizeDecimal(volumeQuote),
+      bidPrice: normalizeDecimal(coin.current_price),
+      askPrice: normalizeDecimal(coin.current_price),
       tradeCount: 0,
       openTime: now - 86_400_000,
       closeTime: now,
       updatedAt: now,
-      source: "binance",
+      source: "coingecko" as const,
       streaming: false,
-    } satisfies MarketTickerSnapshot;
+    } satisfies MarketTickerSnapshot];
   });
-
-  return {
-    pairs,
-    topGainers: pairs.slice(0, 5),
-    topLosers: pairs.slice(-5),
-    overview: pairs.map(toSummaryRow),
-    source: "binance" as const,
-    streaming: false,
-    updatedAt: now,
-    fallback: true,
-  };
 }
 
 export async function GET(request: NextRequest) {
   const rawSymbols = request.nextUrl.searchParams.get("symbols");
   const { symbols, invalid } = parseSymbols(rawSymbols);
+  const requestUrl = `${request.nextUrl.pathname}${request.nextUrl.search}`;
 
   if (rawSymbols && invalid.length > 0 && symbols.length === 0) {
     return buildErrorResponse(
@@ -196,6 +313,10 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[markets/overview] fetch start", { requestUrl, symbolsCount: symbols.length });
+    }
+
     const upstreamResponse = await fetch(
       `${BINANCE_REST_BASE_URL}/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(symbols))}`,
       {
@@ -217,20 +338,23 @@ export async function GET(request: NextRequest) {
     }
 
     const pairs = payload.map(normalizeTicker);
-    const movers = [...pairs].sort(
-      (left, right) => Number.parseFloat(right.priceChangePercent) - Number.parseFloat(left.priceChangePercent),
-    );
+    const updatedAt = Date.now();
+    rememberOverviewSnapshot(pairs, "binance", updatedAt);
+
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[markets/overview] binance success", {
+        requestUrl,
+        status: upstreamResponse.status,
+        pairs: pairs.length,
+      });
+    }
 
     return NextResponse.json(
-      {
+      buildOverviewPayload({
         pairs,
-        topGainers: movers.slice(0, 5),
-        topLosers: [...movers].reverse().slice(0, 5),
-        overview: pairs.map(toSummaryRow),
         source: "binance",
-        streaming: false,
-        updatedAt: Date.now(),
-      },
+        updatedAt,
+      }),
       {
         status: 200,
         headers: {
@@ -239,20 +363,70 @@ export async function GET(request: NextRequest) {
       },
     );
   } catch (error) {
-    const details = error instanceof Error ? error.message : "Unknown market overview error.";
-    const fallback = buildFallbackOverview(symbols);
+    const primaryError = error instanceof Error ? error.message : "Unknown market overview error.";
 
-    return NextResponse.json(
-      {
-        ...fallback,
-        details,
-      },
-      {
-        status: 200,
-        headers: {
-          "Cache-Control": "no-store, max-age=0",
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[markets/overview] binance failed", { requestUrl, reason: primaryError });
+    }
+
+    try {
+      const fallbackPairs = await fetchCoinGeckoOverview(symbols);
+      if (fallbackPairs.length > 0) {
+        const updatedAt = Date.now();
+        rememberOverviewSnapshot(fallbackPairs, "coingecko", updatedAt);
+
+        if (process.env.NODE_ENV !== "production") {
+          console.info("[markets/overview] coingecko fallback success", {
+            requestUrl,
+            pairs: fallbackPairs.length,
+          });
+        }
+
+        return NextResponse.json(
+          buildOverviewPayload({
+            pairs: fallbackPairs,
+            source: "coingecko",
+            updatedAt,
+          }),
+          {
+            status: 200,
+            headers: {
+              "Cache-Control": "no-store, max-age=0",
+            },
+          },
+        );
+      }
+    } catch (secondaryError) {
+      const secondaryDetails =
+        secondaryError instanceof Error ? secondaryError.message : "Unknown coingecko fallback error.";
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[markets/overview] coingecko failed", { requestUrl, reason: secondaryDetails });
+      }
+    }
+
+    const cached = getCachedOverview();
+    if (cached && cached.pairs.length > 0) {
+      return NextResponse.json(
+        buildOverviewPayload({
+          pairs: cached.pairs,
+          source: cached.source,
+          updatedAt: cached.updatedAt,
+          fallback: true,
+          details: primaryError,
+        }),
+        {
+          status: 200,
+          headers: {
+            "Cache-Control": "no-store, max-age=0",
+          },
         },
-      },
+      );
+    }
+
+    return buildErrorResponse(
+      502,
+      "Failed to load market overview.",
+      primaryError,
     );
   }
 }

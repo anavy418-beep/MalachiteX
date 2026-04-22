@@ -50,10 +50,13 @@ type MarketOverviewFlatRow = {
 
 type MarketOverviewResponse = {
   pairs?: Array<MarketOverviewPair | MarketOverviewFlatRow>;
+  topGainers?: Array<MarketOverviewPair | MarketOverviewFlatRow>;
+  topLosers?: Array<MarketOverviewPair | MarketOverviewFlatRow>;
   overview?: MarketOverviewFlatRow[];
   updatedAt?: number;
   fallback?: boolean;
   details?: string;
+  source?: "binance" | "coingecko" | "cache";
 };
 
 const OVERVIEW_SYMBOLS = [
@@ -245,10 +248,19 @@ export default function HomePage() {
 
   useEffect(() => {
     let active = true;
+    const overviewUrl = `/api/markets/overview?symbols=${OVERVIEW_SYMBOLS.join(",")}`;
 
     const fetchOverview = async () => {
       try {
-        const response = await fetch(`/api/markets/overview?symbols=${OVERVIEW_SYMBOLS.join(",")}`, { cache: "no-store" });
+        const response = await fetch(overviewUrl, { cache: "no-store" });
+
+        if (process.env.NODE_ENV !== "production") {
+          console.info("[homepage-market-preview] fetch", {
+            url: overviewUrl,
+            status: response.status,
+          });
+        }
+
         if (!response.ok) {
           throw new Error(`Market overview request failed (${response.status}).`);
         }
@@ -264,7 +276,18 @@ export default function HomePage() {
         const normalizedPairs = rawPairs.map(normalizeOverviewPair).filter((pair): pair is MarketOverviewPair => Boolean(pair));
         const isFallbackPayload = payload.fallback === true;
 
-        if (normalizedPairs.length > 0 && !isFallbackPayload) {
+        if (process.env.NODE_ENV !== "production") {
+          console.info("[homepage-market-preview] normalize", {
+            source: payload.source,
+            fallback: isFallbackPayload,
+            normalizedPairs: normalizedPairs.length,
+            topGainers: Array.isArray(payload.topGainers) ? payload.topGainers.length : 0,
+            topLosers: Array.isArray(payload.topLosers) ? payload.topLosers.length : 0,
+            overviewRows: Array.isArray(payload.overview) ? payload.overview.length : 0,
+          });
+        }
+
+        if (normalizedPairs.length > 0) {
           setMarketPairs(normalizedPairs);
           hasLiveMarketSnapshotRef.current = true;
         }

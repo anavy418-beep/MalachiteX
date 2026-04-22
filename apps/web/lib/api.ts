@@ -1,4 +1,6 @@
 import {
+  ACCESS_TOKEN_COOKIE,
+  REFRESH_TOKEN_COOKIE,
   SESSION_COOKIE,
   SESSION_TOKEN_PLACEHOLDER,
 } from "./auth-constants";
@@ -60,6 +62,20 @@ function setCookie(name: string, value: string, maxAgeSeconds: number) {
 function clearCookie(name: string) {
   if (!isBrowser()) return;
   document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
+}
+
+const SESSION_MARKER_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+
+function setSessionMarkerCookies() {
+  setCookie(SESSION_COOKIE, "1", SESSION_MARKER_MAX_AGE_SECONDS);
+  setCookie(ACCESS_TOKEN_COOKIE, "1", SESSION_MARKER_MAX_AGE_SECONDS);
+  setCookie(REFRESH_TOKEN_COOKIE, "1", SESSION_MARKER_MAX_AGE_SECONDS);
+}
+
+function clearSessionMarkerCookies() {
+  clearCookie(SESSION_COOKIE);
+  clearCookie(ACCESS_TOKEN_COOKIE);
+  clearCookie(REFRESH_TOKEN_COOKIE);
 }
 
 function unwrapData<T>(payload: unknown): T {
@@ -167,27 +183,31 @@ export const tokenStore = {
   },
   set accessToken(value: string | null) {
     if (!value) {
-      clearCookie(SESSION_COOKIE);
+      clearSessionMarkerCookies();
       return;
     }
 
-    setCookie(SESSION_COOKIE, "1", 7 * 24 * 60 * 60);
+    setSessionMarkerCookies();
   },
   get refreshToken(): string | null {
     return this.hasSessionMarker() ? SESSION_TOKEN_PLACEHOLDER : null;
   },
   set refreshToken(value: string | null) {
     if (!value) {
-      clearCookie(SESSION_COOKIE);
+      clearSessionMarkerCookies();
       return;
     }
 
-    setCookie(SESSION_COOKIE, "1", 7 * 24 * 60 * 60);
+    setSessionMarkerCookies();
   },
   hasSessionMarker() {
-    return Boolean(getCookie(SESSION_COOKIE));
+    return Boolean(
+      getCookie(SESSION_COOKIE) ||
+      getCookie(ACCESS_TOKEN_COOKIE) ||
+      getCookie(REFRESH_TOKEN_COOKIE),
+    );
   },
   clear() {
-    clearCookie(SESSION_COOKIE);
+    clearSessionMarkerCookies();
   },
 };

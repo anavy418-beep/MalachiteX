@@ -1,4 +1,5 @@
 import { apiRequest, tokenStore } from "@/lib/api";
+import { SESSION_TOKEN_PLACEHOLDER } from "@/lib/auth-constants";
 
 export interface AuthUser {
   id: string;
@@ -44,14 +45,20 @@ function toUsername(fullName: string): string {
 
 export const authService = {
   async login(input: LoginInput): Promise<AuthResult> {
-    return apiRequest<AuthResult>("/auth/login", {
+    const result = await apiRequest<AuthResult>("/auth/login", {
       method: "POST",
       body: JSON.stringify(input),
     });
+
+    // Keep frontend auth markers in sync so protected routes resolve correctly after auth.
+    tokenStore.accessToken = SESSION_TOKEN_PLACEHOLDER;
+    tokenStore.refreshToken = SESSION_TOKEN_PLACEHOLDER;
+
+    return result;
   },
 
   async signup(input: SignupInput): Promise<AuthResult> {
-    return apiRequest<AuthResult>("/auth/signup", {
+    const result = await apiRequest<AuthResult>("/auth/signup", {
       method: "POST",
       body: JSON.stringify({
         email: input.email,
@@ -59,6 +66,12 @@ export const authService = {
         password: input.password,
       }),
     });
+
+    // Keep frontend auth markers in sync so protected routes resolve correctly after auth.
+    tokenStore.accessToken = SESSION_TOKEN_PLACEHOLDER;
+    tokenStore.refreshToken = SESSION_TOKEN_PLACEHOLDER;
+
+    return result;
   },
 
   async logout(): Promise<void> {

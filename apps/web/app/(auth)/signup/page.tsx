@@ -31,6 +31,20 @@ const signupSchema = z
 type SignupFormData = z.infer<typeof signupSchema>;
 type FormErrors = Partial<Record<keyof SignupFormData, string>>;
 
+function resolveSignupErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+
+  if (/already in use|already exists|conflict|409/i.test(message)) {
+    return "An account with this email already exists. Please sign in instead.";
+  }
+
+  if (/failed to fetch|networkerror|load failed|timeout|unreachable/i.test(message)) {
+    return "We could not reach live account services right now. Please try again in a moment.";
+  }
+
+  return friendlyErrorMessage(error, "Unable to create your account right now.");
+}
+
 export default function SignupPage() {
   const router = useRouter();
   const { signup, isAuthenticated, isBootstrapping } = useAuth();
@@ -47,7 +61,8 @@ export default function SignupPage() {
 
   useEffect(() => {
     if (!isBootstrapping && isAuthenticated) {
-      router.replace("/dashboard");
+      router.replace("/");
+      router.refresh();
     }
   }, [isAuthenticated, isBootstrapping, router]);
 
@@ -72,6 +87,7 @@ export default function SignupPage() {
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (loading) return;
     setFormError(null);
 
     const errors = validate(formData);
@@ -90,9 +106,10 @@ export default function SignupPage() {
         password: formData.password,
       });
 
-      router.replace("/dashboard");
+      router.replace("/");
+      router.refresh();
     } catch (error) {
-      setFormError(friendlyErrorMessage(error, "Unable to create your account right now."));
+      setFormError(resolveSignupErrorMessage(error));
     } finally {
       setLoading(false);
     }
