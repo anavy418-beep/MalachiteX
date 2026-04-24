@@ -30,7 +30,10 @@ function normalizeApiBaseUrl(rawValue: string) {
 
   try {
     const parsed = new URL(value);
-    if (!parsed.pathname || parsed.pathname === "/") {
+    const normalizedPath = parsed.pathname.replace(/\/+$/, "");
+    if (!normalizedPath || normalizedPath === "/") {
+      parsed.pathname = "/api";
+    } else if (/^\/api(\/api)+$/i.test(normalizedPath)) {
       parsed.pathname = "/api";
     }
 

@@ -10,12 +10,21 @@ import { AppModule } from "./app.module";
 function normalizeOrigin(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return "";
+  if (trimmed === "*") return "*";
 
   try {
     return new URL(trimmed).origin;
   } catch {
     return trimmed.replace(/\/+$/, "");
   }
+}
+
+function parseOriginList(value?: string) {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((origin) => normalizeOrigin(origin))
+    .filter(Boolean);
 }
 
 function toVercelProjectSlug(origin: string) {
@@ -60,27 +69,24 @@ async function bootstrap() {
     "https://malachitex-web.vercel.app",
     "https://xorviqa-web.vercel.app",
   ];
-
-  const rawCorsOrigins =
-    process.env.CORS_ORIGIN ??
-    process.env.FRONTEND_URL ??
-    (
-      process.env.NODE_ENV === "production"
-        ? productionDefaultOrigins.join(",")
-        : "http://localhost:3000"
-    );
-
-  const allowedOrigins = rawCorsOrigins
-    .split(",")
-    .map((origin) => normalizeOrigin(origin))
-    .filter(Boolean);
+  const configuredOrigins = [
+    ...parseOriginList(process.env.CORS_ORIGIN),
+    ...parseOriginList(process.env.FRONTEND_URL),
+  ];
+  const fallbackOrigins = process.env.NODE_ENV === "production"
+    ? productionDefaultOrigins
+    : ["http://localhost:3000"];
+  const mergedOrigins = configuredOrigins.length > 0
+    ? [...configuredOrigins, ...fallbackOrigins]
+    : fallbackOrigins;
 
   const vercelOrigin = process.env.VERCEL_URL
     ? normalizeOrigin(`https://${process.env.VERCEL_URL}`)
     : "";
+  const allowAnyOrigin = mergedOrigins.includes("*");
 
   const allowedOriginSet = new Set(
-    vercelOrigin ? [...allowedOrigins, vercelOrigin] : allowedOrigins,
+    (vercelOrigin ? [...mergedOrigins, vercelOrigin] : mergedOrigins).filter((origin) => origin !== "*"),
   );
   const allowVercelPreviewOrigins = process.env.ALLOW_VERCEL_PREVIEW_ORIGINS !== "false";
   const allowedVercelProjectSlugs = new Set(
@@ -93,6 +99,11 @@ async function bootstrap() {
     cors: {
       origin: (origin, callback) => {
         if (!origin) {
+          callback(null, true);
+          return;
+        }
+
+        if (allowAnyOrigin) {
           callback(null, true);
           return;
         }
