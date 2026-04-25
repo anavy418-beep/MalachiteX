@@ -29,6 +29,28 @@ const POPULAR_SYMBOLS = [
   "ATOMUSDT",
   "HBARUSDT",
 ];
+const SYNTHETIC_BASE_PRICE_BY_SYMBOL: Record<string, number> = {
+  BTCUSDT: 68420.1,
+  ETHUSDT: 3520.45,
+  SOLUSDT: 158.77,
+  BNBUSDT: 612.35,
+  XRPUSDT: 0.59,
+  DOGEUSDT: 0.19,
+  ADAUSDT: 0.47,
+  AVAXUSDT: 36.25,
+  LINKUSDT: 14.1,
+  TONUSDT: 6.2,
+  TRXUSDT: 0.12,
+  LTCUSDT: 88.33,
+  BCHUSDT: 494.22,
+  SHIBUSDT: 0.000026,
+  DOTUSDT: 7.15,
+  NEARUSDT: 7.84,
+  MATICUSDT: 0.92,
+  FILUSDT: 5.65,
+  ATOMUSDT: 8.64,
+  HBARUSDT: 0.13,
+};
 
 type Binance24HourTicker = {
   symbol: string;
@@ -147,26 +169,37 @@ function normalizeTicker(ticker: Binance24HourTicker): MarketPairSnapshot {
   };
 }
 
+function toDecimalString(value: number, maxDigits = 8) {
+  if (!Number.isFinite(value)) return "0";
+  return value.toFixed(maxDigits).replace(/0+$/, "").replace(/\.$/, "") || "0";
+}
+
 function buildFallbackPair(symbol: string, index: number): MarketPairSnapshot {
   const { baseAsset, quoteAsset } = splitSymbol(symbol);
   const now = Date.now();
-  const baseline = (1000 + index * 41).toFixed(2);
+  const baseline = SYNTHETIC_BASE_PRICE_BY_SYMBOL[symbol] ?? Math.max(1000 - index * 23, 1);
+  const movementPercent = (index % 2 === 0 ? 1 : -1) * (0.18 + (index % 5) * 0.19);
+  const movement = baseline * (movementPercent / 100);
+  const lastPrice = baseline + movement;
+  const highPrice = Math.max(lastPrice, baseline) * 1.005;
+  const lowPrice = Math.min(lastPrice, baseline) * 0.995;
+  const quoteVolume = (95_000_000 / (index + 1)) * (1 + Math.abs(movementPercent) / 3);
 
   return {
     symbol,
     baseAsset,
     quoteAsset,
     displaySymbol: `${baseAsset}/${quoteAsset}`,
-    lastPrice: baseline,
-    openPrice: baseline,
-    highPrice: baseline,
-    lowPrice: baseline,
-    priceChange: "0.00",
-    priceChangePercent: "0.00",
-    volume: "0.00",
-    quoteVolume: "0.00",
-    bidPrice: baseline,
-    askPrice: baseline,
+    lastPrice: toDecimalString(lastPrice),
+    openPrice: toDecimalString(baseline),
+    highPrice: toDecimalString(highPrice),
+    lowPrice: toDecimalString(lowPrice),
+    priceChange: toDecimalString(movement),
+    priceChangePercent: toDecimalString(movementPercent),
+    volume: toDecimalString(quoteVolume / Math.max(lastPrice, 1)),
+    quoteVolume: toDecimalString(quoteVolume),
+    bidPrice: toDecimalString(lastPrice * 0.9995),
+    askPrice: toDecimalString(lastPrice * 1.0005),
     tradeCount: 0,
     openTime: now - 86_400_000,
     closeTime: now,
@@ -266,4 +299,3 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-

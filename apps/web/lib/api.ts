@@ -173,7 +173,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const payload = await parsePayload(response);
 
   if (!response.ok) {
-    if (response.status === 401) {
+    if (response.status === 401 && path === "/auth/me") {
       tokenStore.clear();
     }
 

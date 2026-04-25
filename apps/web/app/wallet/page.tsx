@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowDownToLine, ArrowUpFromLine, Clock3, History, QrCode } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { friendlyErrorMessage } from "@/lib/errors";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
+import { resolvedPublicApiBaseUrl } from "@/lib/runtime-config";
 import {
   getWalletNetworkLabel,
   resolveWalletIdentity,
@@ -34,6 +35,44 @@ export default function WalletPage() {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
   const [selectedNetwork, setSelectedNetwork] = useState<WalletNetwork>("ERC20");
+  const walletEndpoint = `${resolvedPublicApiBaseUrl || "http://localhost:4000/api"}/wallet`;
+
+  const loadWallet = useCallback(async (reason: "mount" | "retry" | "refresh" = "mount") => {
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[wallet] fetch start", { reason, endpoint: walletEndpoint });
+    }
+    setLoading(true);
+
+    try {
+      const payload = await walletService.getWallet();
+      if (process.env.NODE_ENV !== "production") {
+        console.info("[wallet] fetch success", {
+          reason,
+          endpoint: walletEndpoint,
+          availableBalanceMinor: payload.availableBalanceMinor,
+          escrowBalanceMinor: payload.escrowBalanceMinor,
+        });
+      }
+      setWallet(payload);
+      setError(null);
+    } catch (err) {
+      const errorMeta = err as Error & { status?: number; url?: string };
+      const message = friendlyErrorMessage(err, "Unable to load live wallet data. Showing safe wallet state.");
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[wallet] fetch failed", {
+          reason,
+          endpoint: walletEndpoint,
+          status: errorMeta.status ?? null,
+          url: errorMeta.url ?? null,
+          error: err instanceof Error ? err.message : String(err ?? ""),
+        });
+      }
+      setWallet((current) => current ?? EMPTY_WALLET_SUMMARY);
+      setError(message.includes("session") ? message : "Unable to load live wallet data. Showing safe wallet state.");
+    } finally {
+      setLoading(false);
+    }
+  }, [walletEndpoint]);
 
   useEffect(() => {
     if (isBootstrapping) {
@@ -47,33 +86,8 @@ export default function WalletPage() {
       return;
     }
 
-    let active = true;
-
-    const loadWallet = async () => {
-      setLoading(true);
-
-      try {
-        const payload = await walletService.getWallet();
-        if (!active) return;
-        setWallet(payload);
-        setError(null);
-      } catch (err) {
-        if (!active) return;
-        setWallet(null);
-        setError(friendlyErrorMessage(err, "Live wallet data is temporarily unavailable."));
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    };
-
-    void loadWallet();
-
-    return () => {
-      active = false;
-    };
-  }, [isAuthenticated, isBootstrapping]);
+    void loadWallet("mount");
+  }, [isAuthenticated, isBootstrapping, loadWallet]);
 
   const current = wallet ?? EMPTY_WALLET_SUMMARY;
   const available = BigInt(current.availableBalanceMinor || "0");
@@ -127,20 +141,6 @@ export default function WalletPage() {
     );
   }
 
-  if (!wallet && !loading && error) {
-    return (
-      <section className="space-y-3">
-        <h1 className="text-2xl font-semibold text-white">Wallet</h1>
-        <p className="text-sm text-slate-400">
-          We could not load your wallet right now. Please refresh or try again in a moment.
-        </p>
-        <Button variant="outline" onClick={() => window.location.reload()}>
-          Retry
-        </Button>
-      </section>
-    );
-  }
-
   return (
     <section className="space-y-6">
       <header className="space-y-2">
@@ -153,9 +153,20 @@ export default function WalletPage() {
         <Card className="border-amber-500/30 bg-amber-950/20">
           <CardContent className="pt-6">
             <p className="text-sm text-amber-200">
-              Live wallet data is temporarily unavailable. Balances are hidden until sync recovers.
+              Unable to load live wallet data. Showing safe wallet state.
             </p>
-            <p className="mt-1 text-xs text-amber-300/80">{error}</p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <p className="text-xs text-amber-300/80">{error}</p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-amber-700/40 text-amber-200 hover:bg-amber-950/40"
+                onClick={() => void loadWallet("retry")}
+                disabled={loading}
+              >
+                {loading ? "Retrying..." : "Retry"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ) : null}

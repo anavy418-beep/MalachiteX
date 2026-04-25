@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -30,6 +31,18 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const userRef = useRef<AuthUser | null>(null);
+
+  useEffect(() => {
+    userRef.current = user;
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[auth] state changed", {
+        isBootstrapping,
+        isAuthenticated: Boolean(user),
+        userId: user?.id ?? null,
+      });
+    }
+  }, [isBootstrapping, user]);
 
   const refreshUser = useCallback(async (): Promise<AuthUser | null> => {
     if (!tokenStore.hasSessionMarker()) {
@@ -42,16 +55,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(currentUser);
       return currentUser;
     } catch (error) {
+      const errorMeta = error as Error & { status?: number; url?: string };
+      const status = typeof errorMeta.status === "number" ? errorMeta.status : undefined;
       const reachability = await apiHealthService.checkReachability();
       const authFailureLikely =
-        error instanceof Error &&
-        /(401|403|unauthorized|forbidden|invalid|session|token|jwt)/i.test(error.message);
+        status === 401 ||
+        status === 403 ||
+        (
+          error instanceof Error &&
+          /(401|403|unauthorized|forbidden|invalid|session|token|jwt)/i.test(error.message)
+        );
 
-      if (authFailureLikely || reachability.reachable) {
+      if (authFailureLikely) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[auth] clearing session markers after confirmed auth failure", {
+            status,
+            url: errorMeta.url ?? null,
+            reason: error instanceof Error ? error.message : String(error ?? ""),
+          });
+        }
         tokenStore.clear();
+        setUser(null);
+        return null;
       }
-      setUser(null);
-      return null;
+
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[auth] preserving session markers after non-auth refresh failure", {
+          status,
+          reachable: reachability.reachable,
+          url: errorMeta.url ?? null,
+          reason: error instanceof Error ? error.message : String(error ?? ""),
+        });
+      }
+
+      return userRef.current;
     }
   }, []);
 
