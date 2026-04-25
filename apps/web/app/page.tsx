@@ -87,8 +87,8 @@ const productCards = [
   { icon: WalletCards, title: "Wallet", body: "Custodial wallet balances, transfers, and settlement tracking.", cta: "Open Wallet", href: "/wallet" },
   { icon: SwatchBook, title: "Instant Swap", body: "Swap supported assets instantly with transparent rates.", cta: "Swap Demo", href: "/markets" },
   { icon: Gift, title: "Gift Cards", body: "Buy and redeem digital gift cards via crypto balance.", cta: "View Gift Desk", href: "/p2p" },
-  { icon: Building2, title: "OTC Desk", body: "High-volume assisted trading for premium users and partners.", cta: "Request OTC", href: "/dashboard" },
-  { icon: CreditCard, title: "Virtual Card", body: "Spend crypto through virtual payment rails in supported regions.", cta: "Coming Soon", href: "/dashboard" },
+  { icon: Building2, title: "OTC Desk", body: "High-volume assisted trading for premium users and partners.", cta: "Request OTC", href: "/p2p" },
+  { icon: CreditCard, title: "Virtual Card", body: "Spend crypto through virtual payment rails in supported regions.", cta: "Coming Soon", href: "/wallet" },
   { icon: CircleDollarSign, title: "Direct Buy", body: "Buy major assets quickly with local payment methods.", cta: "Buy Crypto", href: "/markets" },
   { icon: Landmark, title: "Cash Out", body: "Sell crypto and settle to supported banks and local rails.", cta: "Sell Crypto", href: "/p2p" },
 ];
@@ -112,10 +112,10 @@ const trustStats = [
 ];
 
 const supportItems = [
-  { icon: BookOpen, title: "Help Center", body: "Guides for onboarding, wallet, and trade lifecycle.", cta: "Browse Articles", href: "/dashboard" },
-  { icon: Bot, title: "Academy", body: "Learn crypto safety, P2P best practices, and platform tips.", cta: "Start Learning", href: "/dashboard" },
-  { icon: Headphones, title: "Contact Support", body: "Reach support for urgent settlement or account help.", cta: "Open Support", href: "/dashboard" },
-  { icon: HelpCircle, title: "FAQ", body: "Quick answers for payments, limits, and dispute handling.", cta: "Read FAQ", href: "/dashboard" },
+  { icon: BookOpen, title: "Help Center", body: "Guides for onboarding, wallet, and trade lifecycle.", cta: "Browse Articles", href: "/p2p" },
+  { icon: Bot, title: "Academy", body: "Learn crypto safety, P2P best practices, and platform tips.", cta: "Start Learning", href: "/markets" },
+  { icon: Headphones, title: "Contact Support", body: "Reach support for urgent settlement or account help.", cta: "Open Support", href: "/p2p" },
+  { icon: HelpCircle, title: "FAQ", body: "Quick answers for payments, limits, and dispute handling.", cta: "Read FAQ", href: "/p2p" },
 ];
 
 const partnerPrograms = [
@@ -254,13 +254,6 @@ export default function HomePage() {
       try {
         const response = await fetch(overviewUrl, { cache: "no-store" });
 
-        if (process.env.NODE_ENV !== "production") {
-          console.info("[homepage-market-preview] fetch", {
-            url: overviewUrl,
-            status: response.status,
-          });
-        }
-
         if (!response.ok) {
           throw new Error(`Market overview request failed (${response.status}).`);
         }
@@ -275,17 +268,6 @@ export default function HomePage() {
             : [];
         const normalizedPairs = rawPairs.map(normalizeOverviewPair).filter((pair): pair is MarketOverviewPair => Boolean(pair));
         const isFallbackPayload = payload.fallback === true;
-
-        if (process.env.NODE_ENV !== "production") {
-          console.info("[homepage-market-preview] normalize", {
-            source: payload.source,
-            fallback: isFallbackPayload,
-            normalizedPairs: normalizedPairs.length,
-            topGainers: Array.isArray(payload.topGainers) ? payload.topGainers.length : 0,
-            topLosers: Array.isArray(payload.topLosers) ? payload.topLosers.length : 0,
-            overviewRows: Array.isArray(payload.overview) ? payload.overview.length : 0,
-          });
-        }
 
         if (normalizedPairs.length > 0) {
           setMarketPairs(normalizedPairs);
@@ -309,7 +291,6 @@ export default function HomePage() {
         }
       } catch (error) {
         if (!active) return;
-        console.error("Homepage market preview error:", error);
         if (hasLiveMarketSnapshotRef.current) {
           setMarketError("Using recent cached market snapshot. Live refresh will resume automatically.");
         } else {
@@ -376,7 +357,7 @@ export default function HomePage() {
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Link href="/login?demo=1&next=/dashboard" prefetch={false}>
+              <Link href="/login?demo=1&next=/trades" prefetch={false}>
                 <Button size="lg" className="w-full gap-2 sm:w-auto">
                   <Sparkles className="h-4 w-4" />
                   Try Demo

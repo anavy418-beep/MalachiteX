@@ -83,6 +83,18 @@ export class OffersService {
     return Object.keys(details).length > 0 ? details : undefined;
   }
 
+  private shouldRetryWithoutPaymentDetails(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    if (!/paymentDetails/i.test(message)) {
+      return false;
+    }
+
+    // Handle environments where paymentDetails isn't accepted yet by Prisma client/DB schema.
+    return /Unknown arg|Unknown field|column .* does not exist|Invalid .*paymentDetails|P2009|P2022/i.test(
+      message,
+    );
+  }
+
   async listActive() {
     const offers = await this.prisma.offer.findMany({
       where: { status: OfferStatus.ACTIVE },
@@ -123,21 +135,42 @@ export class OffersService {
 
     const paymentDetails = this.buildPaymentDetails(dto);
 
-    const offer = await this.prisma.offer.create({
-      data: {
-        userId,
-        type: dto.type,
-        asset: dto.asset,
-        fiatCurrency: dto.fiatCurrency,
-        priceMinor,
-        minAmountMinor,
-        maxAmountMinor,
-        paymentMethod: dto.paymentMethod,
-        paymentDetails,
-        terms: dto.terms,
-      } as any,
-      select: OFFER_RESPONSE_SELECT,
-    });
+    const createData = {
+      userId,
+      type: dto.type,
+      asset: dto.asset,
+      fiatCurrency: dto.fiatCurrency,
+      priceMinor,
+      minAmountMinor,
+      maxAmountMinor,
+      paymentMethod: dto.paymentMethod,
+      terms: dto.terms,
+    };
+
+    let offer;
+    try {
+      offer = await this.prisma.offer.create({
+        data: paymentDetails
+          ? {
+              ...createData,
+              paymentDetails,
+            }
+          : createData,
+        select: OFFER_RESPONSE_SELECT,
+      });
+    } catch (error) {
+      if (paymentDetails && this.shouldRetryWithoutPaymentDetails(error)) {
+        this.logger.warn(
+          "Offer create retrying without paymentDetails due compatibility mismatch.",
+        );
+        offer = await this.prisma.offer.create({
+          data: createData,
+          select: OFFER_RESPONSE_SELECT,
+        });
+      } else {
+        throw error;
+      }
+    }
 
     this.logger.log(`Offer ${offer.id} created by ${userId}`);
 

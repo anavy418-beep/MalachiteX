@@ -111,7 +111,10 @@ async function rotateAccessToken(): Promise<boolean> {
       });
 
       if (!response.ok) {
-        tokenStore.clear();
+        // Clear only on confirmed auth failures. Keep session marker for transient upstream failures.
+        if (response.status === 401 || response.status === 403) {
+          tokenStore.clear();
+        }
         return false;
       }
 

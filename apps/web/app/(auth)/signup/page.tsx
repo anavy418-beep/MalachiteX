@@ -10,8 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
-import { resolvedPublicApiBaseUrl } from "@/lib/runtime-config";
-import { apiHealthService } from "@/services/api-health.service";
 
 const signupSchema = z
   .object({
@@ -32,15 +30,12 @@ const signupSchema = z
 type SignupFormData = z.infer<typeof signupSchema>;
 type FormErrors = Partial<Record<keyof SignupFormData, string>>;
 
-const SIGNUP_API_PATH = "/auth/signup";
 const SIGNUP_NETWORK_ERROR_MESSAGE = "Could not connect to the server. Please try again.";
 const SIGNUP_RETRY_DELAY_MS = 1_200;
 const SIGNUP_NETWORK_RETRY_ATTEMPTS = 2;
 
 type ApiClientError = Error & {
   status?: number;
-  url?: string;
-  rawMessage?: string;
 };
 
 function sleep(ms: number) {
@@ -100,7 +95,6 @@ export default function SignupPage() {
   const [fieldErrors, setFieldErrors] = useState<FormErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const signupUrl = `${resolvedPublicApiBaseUrl}${SIGNUP_API_PATH}`;
 
   useEffect(() => {
     if (!isBootstrapping && isAuthenticated) {
@@ -112,13 +106,6 @@ export default function SignupPage() {
   useEffect(() => {
     // Always start from a clean availability state on mount.
     setSubmitError(null);
-
-    if (process.env.NODE_ENV !== "production") {
-      console.info("[signup] mounted", {
-        resolvedApiBaseUrl: resolvedPublicApiBaseUrl,
-        signupPath: SIGNUP_API_PATH,
-      });
-    }
   }, []);
 
   function validate(data: SignupFormData): FormErrors {
@@ -145,12 +132,6 @@ export default function SignupPage() {
     if (loading) return;
     setSubmitError(null);
 
-    console.info("[signup] submit attempt", {
-      resolvedApiBaseUrl: resolvedPublicApiBaseUrl,
-      signupUrl,
-      signupPath: SIGNUP_API_PATH,
-    });
-
     const errors = validate(formData);
     setFieldErrors(errors);
 
@@ -169,37 +150,20 @@ export default function SignupPage() {
 
       let submitFailure: unknown = null;
       let submitRawMessage = "";
-      let submitMeta: { status?: number; url?: string; rawMessage?: string } = {};
       let lastErrorType: "network" | "backend" | "unknown" = "unknown";
 
       for (let attempt = 1; attempt <= SIGNUP_NETWORK_RETRY_ATTEMPTS; attempt += 1) {
         try {
           await signup(submitPayload);
           setSubmitError(null);
-          console.info("[signup] success", {
-            signupUrl,
-            attempt,
-          });
           router.replace("/");
           router.refresh();
           return;
         } catch (error) {
           submitFailure = error;
           submitRawMessage = error instanceof Error ? error.message : String(error ?? "");
-          submitMeta = getApiClientErrorMeta(error);
           const networkFailure = isNetworkFailure(error, submitRawMessage);
           lastErrorType = networkFailure ? "network" : "backend";
-
-          console.warn("[signup] signup attempt failed", {
-            attempt,
-            maxAttempts: SIGNUP_NETWORK_RETRY_ATTEMPTS,
-            signupUrl,
-            signupRequestUrl: submitMeta.url,
-            signupStatus: submitMeta.status,
-            signupRawMessage: submitMeta.rawMessage,
-            message: submitRawMessage,
-            classifiedAsNetworkFailure: networkFailure,
-          });
 
           if (!networkFailure || attempt === SIGNUP_NETWORK_RETRY_ATTEMPTS) {
             break;
@@ -215,33 +179,9 @@ export default function SignupPage() {
       }
 
       if (lastErrorType === "network") {
-        const reachability = await apiHealthService.checkReachability();
-
-        console.warn("[signup] final failure classified as network", {
-          signupUrl,
-          signupRequestUrl: submitMeta.url,
-          signupStatus: submitMeta.status,
-          signupRawMessage: submitMeta.rawMessage,
-          message: submitRawMessage,
-          healthUrl: reachability.url,
-          healthReachable: reachability.reachable,
-          healthStatus: reachability.status,
-          healthReason: reachability.reason,
-          healthAttempts: reachability.attempts,
-          finalMessage: SIGNUP_NETWORK_ERROR_MESSAGE,
-        });
         setSubmitError(SIGNUP_NETWORK_ERROR_MESSAGE);
         return;
       }
-
-      console.warn("[signup] final failure classified as backend", {
-        signupUrl,
-        signupRequestUrl: submitMeta.url,
-        signupStatus: submitMeta.status,
-        signupRawMessage: submitMeta.rawMessage,
-        message: submitRawMessage,
-        classification: "backend-validation-or-conflict",
-      });
       setSubmitError(resolveSignupSubmitErrorMessage(submitFailure));
     } finally {
       setLoading(false);
