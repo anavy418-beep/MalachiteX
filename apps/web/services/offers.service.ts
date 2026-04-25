@@ -43,6 +43,10 @@ export interface CreateOfferInput {
   terms?: string;
 }
 
+interface OfferListOptions {
+  includeLocalDemoFallback?: boolean;
+}
+
 function isBrowser() {
   return typeof window !== "undefined";
 }
@@ -111,14 +115,18 @@ function normalizeOffer(offer: OfferRecord): OfferRecord {
 }
 
 export const offersService = {
-  async list() {
-    const demoOffers = readDemoOffers().map(normalizeOffer);
+  async list(options: OfferListOptions = {}) {
+    const { includeLocalDemoFallback = true } = options;
+    const demoOffers = includeLocalDemoFallback ? readDemoOffers().map(normalizeOffer) : [];
 
     try {
       const apiOffers = await apiRequest<OfferRecord[]>("/offers");
+      if (!includeLocalDemoFallback) {
+        return apiOffers.map(normalizeOffer);
+      }
       return mergeUniqueOffers(apiOffers.map(normalizeOffer), demoOffers);
     } catch {
-      return demoOffers;
+      return includeLocalDemoFallback ? demoOffers : [];
     }
   },
 

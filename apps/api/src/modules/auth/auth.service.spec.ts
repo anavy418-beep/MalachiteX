@@ -95,6 +95,14 @@ describe("AuthService", () => {
     expect(result.issuedTokens.accessToken).toBe("access-token");
     expect(result.issuedTokens.refreshToken).toBe("refresh-token");
     expect(prisma.wallet.create).toHaveBeenCalled();
+    expect(prisma.wallet.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          availableBalanceMinor: BigInt(0),
+          escrowBalanceMinor: BigInt(0),
+        }),
+      }),
+    );
     expect(auditService.log).toHaveBeenCalledWith(
       expect.objectContaining({ action: "AUTH_SIGNUP" }),
       prisma,

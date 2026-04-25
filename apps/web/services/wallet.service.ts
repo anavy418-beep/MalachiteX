@@ -39,19 +39,19 @@ export interface WithdrawalRecord {
 }
 
 export const walletService = {
-  getWallet(token: string) {
+  getWallet(token: string | undefined) {
     return apiRequest<WalletSummary>("/wallet", { token });
   },
 
-  listDeposits(token: string) {
+  listDeposits(token: string | undefined) {
     return apiRequest<DepositRecord[]>("/wallet/deposits", { token });
   },
 
-  listWithdrawals(token: string) {
+  listWithdrawals(token: string | undefined) {
     return apiRequest<WithdrawalRecord[]>("/wallet/withdrawals", { token });
   },
 
-  mockDeposit(token: string, input: { amountMinor: string; txRef: string }) {
+  mockDeposit(token: string | undefined, input: { amountMinor: string; txRef: string }) {
     return apiRequest("/wallet/mock-deposit", {
       method: "POST",
       token,
@@ -59,7 +59,7 @@ export const walletService = {
     });
   },
 
-  requestWithdrawal(token: string, input: { amountMinor: string; destination: string }) {
+  requestWithdrawal(token: string | undefined, input: { amountMinor: string; destination: string }) {
     return apiRequest("/wallet/withdrawals", {
       method: "POST",
       token,

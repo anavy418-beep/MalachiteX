@@ -31,7 +31,14 @@ export class WalletService {
     let wallet = await this.prisma.wallet.findUnique({ where: { userId } });
 
     if (!wallet) {
-      throw new NotFoundException("Wallet not found");
+      wallet = await this.prisma.wallet.create({
+        data: {
+          userId,
+          currency: process.env.DEFAULT_FIAT_CURRENCY ?? "INR",
+          availableBalanceMinor: BigInt(0),
+          escrowBalanceMinor: BigInt(0),
+        },
+      });
     }
 
     if (!wallet.walletIdentifier || !wallet.depositAddressBtc || !wallet.depositAddressErc20 || !wallet.depositAddressTrc20) {

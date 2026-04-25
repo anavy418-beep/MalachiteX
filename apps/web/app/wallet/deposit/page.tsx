@@ -1,10 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { ArrowDownToLine, CheckCircle2, Clock3, QrCode } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import { tokenStore } from "@/lib/api";
 import { friendlyErrorMessage } from "@/lib/errors";
-import { DEMO_DEPOSITS, DEMO_WALLET_SUMMARY } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import {
   getWalletNetworkLabel,
@@ -19,8 +20,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { LoadingState } from "@/components/ui/loading-state";
 
 const NETWORKS: WalletNetwork[] = ["ERC20", "TRC20", "BTC"];
+const EMPTY_WALLET_SUMMARY: WalletSummary = {
+  currency: "INR",
+  availableBalanceMinor: "0",
+  escrowBalanceMinor: "0",
+  ledger: [],
+};
 
 function statusBadge(status: string) {
   const normalized = status.toUpperCase();
@@ -37,48 +45,38 @@ function statusBadge(status: string) {
 }
 
 export default function WalletDepositPage() {
+  const { isAuthenticated, isBootstrapping } = useAuth();
   const [records, setRecords] = useState<DepositRecord[]>([]);
   const [wallet, setWallet] = useState<WalletSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [isDemo, setIsDemo] = useState(false);
   const [selectedNetwork, setSelectedNetwork] = useState<WalletNetwork>("ERC20");
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
 
   async function loadRecords() {
-    const token = tokenStore.accessToken;
-
-    if (!token) {
-      setRecords(DEMO_DEPOSITS);
-      setWallet(DEMO_WALLET_SUMMARY);
-      setIsDemo(true);
-      setError("Showing demo deposit records. Use Try Demo to test an authenticated wallet flow.");
-      setLoading(false);
-      return;
-    }
-
     try {
+      const token = tokenStore.accessToken;
+      if (!token) {
+        setWallet(EMPTY_WALLET_SUMMARY);
+        setRecords([]);
+        setError("Wallet session unavailable. Showing safe zero-balance wallet state.");
+        return;
+      }
+
       const [payload, walletPayload] = await Promise.all([
         walletService.listDeposits(token),
         walletService.getWallet(token),
       ]);
 
       setWallet(walletPayload);
-      if (payload.length === 0) {
-        setRecords(DEMO_DEPOSITS);
-        setIsDemo(true);
-      } else {
-        setRecords(payload);
-        setIsDemo(false);
-      }
+      setRecords(payload);
       setError(null);
     } catch (err) {
-      setRecords(DEMO_DEPOSITS);
-      setWallet(DEMO_WALLET_SUMMARY);
-      setIsDemo(true);
+      setRecords([]);
+      setWallet(null);
       setError(friendlyErrorMessage(err, "Live deposit history is temporarily unavailable."));
     } finally {
       setLoading(false);
@@ -86,16 +84,22 @@ export default function WalletDepositPage() {
   }
 
   useEffect(() => {
+    if (isBootstrapping) return;
+    if (!isAuthenticated) {
+      setLoading(false);
+      setRecords([]);
+      setWallet(null);
+      return;
+    }
     void loadRecords();
-  }, []);
+  }, [isAuthenticated, isBootstrapping]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     setSuccess(null);
 
-    const token = tokenStore.accessToken;
-    if (!token) {
+    if (!isAuthenticated) {
       setError("Login required for live deposit submission.");
       return;
     }
@@ -103,11 +107,17 @@ export default function WalletDepositPage() {
     const formData = new FormData(event.currentTarget);
     const amountMinor = String(formData.get("amountMinor") ?? "");
     const txRef = String(formData.get("txRef") ?? "");
+    const token = tokenStore.accessToken;
+
+    if (!token) {
+      setError("Wallet session unavailable. Please sign in again.");
+      return;
+    }
 
     setSubmitting(true);
     try {
       await walletService.mockDeposit(token, { amountMinor, txRef });
-      setSuccess("Mock deposit confirmed successfully.");
+      setSuccess("Deposit confirmed successfully.");
       (event.currentTarget as HTMLFormElement).reset();
       await loadRecords();
     } catch (err) {
@@ -117,7 +127,7 @@ export default function WalletDepositPage() {
     }
   }
 
-  const currentWallet = wallet ?? DEMO_WALLET_SUMMARY;
+  const currentWallet = wallet ?? EMPTY_WALLET_SUMMARY;
   const selectedAsset = selectedNetwork === "BTC" ? "BTC" : "USDT";
   const identity = resolveWalletIdentity({
     walletId: currentWallet.walletId,
@@ -138,12 +148,28 @@ export default function WalletDepositPage() {
     }
   }
 
+  if (isBootstrapping) {
+    return <LoadingState label="Loading wallet deposit workspace" />;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <section className="space-y-3">
+        <h1 className="text-2xl font-semibold text-white">Wallet Deposit</h1>
+        <p className="text-sm text-slate-400">Your session is not active. Please log in to open deposit controls.</p>
+        <Link href="/login?next=/wallet/deposit">
+          <Button>Go to login</Button>
+        </Link>
+      </section>
+    );
+  }
+
   return (
     <section className="space-y-6">
       <header className="space-y-2">
         <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Wallet / Deposit</p>
         <h1 className="text-3xl font-semibold text-white">Deposit Funds</h1>
-        <p className="text-sm text-slate-400">Demo-safe deposit confirmation flow for staging previews.</p>
+        <p className="text-sm text-slate-400">Confirm incoming funds to credit your wallet balance and ledger.</p>
       </header>
 
       <Card>
@@ -183,7 +209,7 @@ export default function WalletDepositPage() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs uppercase tracking-wide text-slate-400">Deposit Address</p>
                 <span className="rounded-full border border-emerald-700/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200">
-                  {selectedAsset} · {getWalletNetworkLabel(selectedNetwork)}
+                  {selectedAsset} - {getWalletNetworkLabel(selectedNetwork)}
                 </span>
               </div>
               <CopyableValueRow
@@ -205,10 +231,10 @@ export default function WalletDepositPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <ArrowDownToLine className="h-5 w-5 text-emerald-300" />
-            Confirm Mock Deposit
+            Confirm Deposit
           </CardTitle>
           <CardDescription>
-            This MVP uses a simulated confirmation flow and does not interact with real blockchain rails.
+            Confirmed deposits are persisted and immediately reflected in wallet available balance.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -281,9 +307,7 @@ export default function WalletDepositPage() {
 
       <p className="inline-flex items-center gap-1 text-xs text-emerald-300/90">
         <CheckCircle2 className="h-3.5 w-3.5" />
-        {isDemo
-          ? "Demo deposit records are active for staging walkthroughs."
-          : "Mock deposit flow is active and safe for staging environments."}
+        Deposits are persisted in your wallet ledger and reflected in balance history.
       </p>
 
       <AddressQrModal
@@ -295,3 +319,4 @@ export default function WalletDepositPage() {
     </section>
   );
 }
+

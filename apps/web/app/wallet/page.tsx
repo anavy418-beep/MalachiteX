@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowDownToLine, ArrowUpFromLine, Clock3, History, QrCode } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
+import { tokenStore } from "@/lib/api";
 import { friendlyErrorMessage } from "@/lib/errors";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import { resolvedPublicApiBaseUrl } from "@/lib/runtime-config";
@@ -28,7 +29,7 @@ const EMPTY_WALLET_SUMMARY: WalletSummary = {
 };
 
 export default function WalletPage() {
-  const { isAuthenticated, isBootstrapping } = useAuth();
+  const { isAuthenticated, isBootstrapping, refreshUser } = useAuth();
   const [wallet, setWallet] = useState<WalletSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +45,14 @@ export default function WalletPage() {
     setLoading(true);
 
     try {
-      const payload = await walletService.getWallet();
+      const token = tokenStore.accessToken;
+      if (!token) {
+        setWallet((current) => current ?? EMPTY_WALLET_SUMMARY);
+        setError("Wallet session token is unavailable. Showing safe wallet state.");
+        return;
+      }
+
+      const payload = await walletService.getWallet(token);
       if (process.env.NODE_ENV !== "production") {
         console.info("[wallet] fetch success", {
           reason,
@@ -58,6 +66,64 @@ export default function WalletPage() {
     } catch (err) {
       const errorMeta = err as Error & { status?: number; url?: string };
       const message = friendlyErrorMessage(err, "Unable to load live wallet data. Showing safe wallet state.");
+      const isAuthFailure =
+        errorMeta.status === 401 ||
+        errorMeta.status === 403 ||
+        /unauthorized|session|token|jwt/i.test(message);
+
+      if (isAuthFailure) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[wallet] auth-like failure detected; verifying session via /auth/me", {
+            reason,
+            endpoint: walletEndpoint,
+            status: errorMeta.status ?? null,
+            error: err instanceof Error ? err.message : String(err ?? ""),
+          });
+        }
+
+        const refreshedUser = await refreshUser();
+
+        if (refreshedUser) {
+          try {
+            const retryToken = tokenStore.accessToken;
+            if (!retryToken) {
+              setWallet((current) => current ?? EMPTY_WALLET_SUMMARY);
+              setError("Wallet session token is unavailable. Showing safe wallet state.");
+              return;
+            }
+
+            const retriedPayload = await walletService.getWallet(retryToken);
+            if (process.env.NODE_ENV !== "production") {
+              console.info("[wallet] fetch success after auth refresh verification", {
+                reason,
+                endpoint: walletEndpoint,
+                availableBalanceMinor: retriedPayload.availableBalanceMinor,
+                escrowBalanceMinor: retriedPayload.escrowBalanceMinor,
+              });
+            }
+
+            setWallet(retriedPayload);
+            setError(null);
+            return;
+          } catch (retryError) {
+            if (process.env.NODE_ENV !== "production") {
+              const retryMeta = retryError as Error & { status?: number; url?: string };
+              console.warn("[wallet] retry fetch failed after auth refresh verification", {
+                reason,
+                endpoint: walletEndpoint,
+                status: retryMeta.status ?? null,
+                url: retryMeta.url ?? null,
+                error: retryError instanceof Error ? retryError.message : String(retryError ?? ""),
+              });
+            }
+          }
+        }
+
+        setWallet((current) => current ?? EMPTY_WALLET_SUMMARY);
+        setError("Your session could not be verified. Please sign in again or use Try Demo.");
+        return;
+      }
+
       if (process.env.NODE_ENV !== "production") {
         console.warn("[wallet] fetch failed", {
           reason,
@@ -68,11 +134,11 @@ export default function WalletPage() {
         });
       }
       setWallet((current) => current ?? EMPTY_WALLET_SUMMARY);
-      setError(message.includes("session") ? message : "Unable to load live wallet data. Showing safe wallet state.");
+      setError("Unable to load live wallet data. Showing safe wallet state.");
     } finally {
       setLoading(false);
     }
-  }, [walletEndpoint]);
+  }, [walletEndpoint, refreshUser]);
 
   useEffect(() => {
     if (isBootstrapping) {
@@ -114,6 +180,9 @@ export default function WalletPage() {
     ],
     [current?.currency, total, available, escrow],
   );
+  const isSessionVerificationError = Boolean(
+    error && /session could not be verified|sign in again/i.test(error),
+  );
 
   async function copyText(value: string, field: string) {
     try {
@@ -153,7 +222,9 @@ export default function WalletPage() {
         <Card className="border-amber-500/30 bg-amber-950/20">
           <CardContent className="pt-6">
             <p className="text-sm text-amber-200">
-              Unable to load live wallet data. Showing safe wallet state.
+              {isSessionVerificationError
+                ? "Your session could not be verified."
+                : "Unable to load live wallet data. Showing safe wallet state."}
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <p className="text-xs text-amber-300/80">{error}</p>

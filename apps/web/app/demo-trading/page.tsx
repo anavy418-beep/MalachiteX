@@ -1116,7 +1116,15 @@ function DemoTradingPageContent() {
     const loadRealWallet = async () => {
       setRealWalletLoading(true);
       try {
-        const payload = await walletService.getWallet();
+        const token = tokenStore.accessToken;
+        if (!token) {
+          if (!active) return;
+          setRealWallet(EMPTY_REAL_WALLET);
+          setRealWalletError("Real wallet session is unavailable. Showing safe zero-balance wallet state.");
+          return;
+        }
+
+        const payload = await walletService.getWallet(token);
         if (!active) return;
         setRealWallet({
           currency: payload?.currency || "USDT",

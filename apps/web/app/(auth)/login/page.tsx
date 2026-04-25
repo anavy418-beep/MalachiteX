@@ -34,6 +34,15 @@ export default function LoginPage() {
   const router = useRouter();
   const { login, isAuthenticated, isBootstrapping } = useAuth();
 
+  function resolveNextPath() {
+    if (typeof window === "undefined") return "/";
+    const requestedNext = new URLSearchParams(window.location.search).get("next");
+    if (requestedNext && requestedNext.startsWith("/") && !requestedNext.startsWith("//")) {
+      return requestedNext;
+    }
+    return "/";
+  }
+
   const [formData, setFormData] = useState<LoginFormData>({
     email: "",
     password: "",
@@ -46,13 +55,13 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isBootstrapping && isAuthenticated) {
-      router.replace("/");
+      router.replace(resolveNextPath());
       router.refresh();
     }
   }, [isAuthenticated, isBootstrapping, router]);
 
   useEffect(() => {
-    const shouldAutoDemo = new URLSearchParams(window.location.search).get("demo") === "1";
+    const shouldAutoDemo = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("demo") === "1";
     if (!shouldAutoDemo || demoAttempted || isAuthenticated || isBootstrapping) return;
 
     setDemoAttempted(true);
@@ -93,7 +102,7 @@ export default function LoginPage() {
 
     try {
       await login(formData);
-      router.replace("/");
+      router.replace(resolveNextPath());
       router.refresh();
     } catch (error) {
       setFormError(friendlyErrorMessage(error, "We could not sign you in. Please check the details and try again."));
@@ -109,21 +118,11 @@ export default function LoginPage() {
 
     try {
       await login(DEMO_LOGIN);
-      router.replace("/");
+      router.replace(resolveNextPath());
       router.refresh();
     } catch (error) {
       setFormData(DEMO_LOGIN);
       const reachability = await apiHealthService.checkReachability(3);
-
-      if (process.env.NODE_ENV !== "production") {
-        console.info("[login] demo reachability result", {
-          reachable: reachability.reachable,
-          url: reachability.url,
-          status: reachability.status,
-          reason: reachability.reason,
-          attempts: reachability.attempts,
-        });
-      }
 
       if (!reachability.reachable) {
         setFormError("Live account features are temporarily unavailable. Public preview remains available.");

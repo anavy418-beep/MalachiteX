@@ -22,6 +22,38 @@ import { MarkTradePaidDto } from "./dto/mark-trade-paid.dto";
 import { OpenTradeDisputeDto } from "./dto/open-trade-dispute.dto";
 import { TradeGateway } from "./trade.gateway";
 
+const TRADE_BASE_SELECT = {
+  id: true,
+  offerId: true,
+  buyerId: true,
+  sellerId: true,
+  amountMinor: true,
+  fiatPriceMinor: true,
+  fiatTotalMinor: true,
+  escrowHeldMinor: true,
+  status: true,
+  openedAt: true,
+  paidAt: true,
+  releasedAt: true,
+  completedAt: true,
+  canceledAt: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.TradeSelect;
+
+const OFFER_FOR_TRADE_SELECT = {
+  id: true,
+  userId: true,
+  status: true,
+  type: true,
+  asset: true,
+  fiatCurrency: true,
+  paymentMethod: true,
+  minAmountMinor: true,
+  maxAmountMinor: true,
+  priceMinor: true,
+} satisfies Prisma.OfferSelect;
+
 @Injectable()
 export class TradesService {
   private readonly logger = new Logger(TradesService.name);
@@ -62,34 +94,6 @@ export class TradesService {
     return cancelledStates.includes(status);
   }
 
-  private buildPaymentInstructions(
-    offer: {
-      paymentMethod: string;
-      paymentDetails?: Prisma.JsonValue | null;
-      fiatCurrency: string;
-    },
-    fiatTotalMinor: bigint,
-  ): Prisma.JsonObject {
-    const details =
-      offer.paymentDetails && typeof offer.paymentDetails === "object" && !Array.isArray(offer.paymentDetails)
-        ? (offer.paymentDetails as Prisma.JsonObject)
-        : {};
-
-    const fallbackReceiver = details.receiverName ?? "Verified Xorviqa merchant";
-
-    return {
-      method: offer.paymentMethod,
-      receiverName: fallbackReceiver,
-      upiId: details.upiId ?? null,
-      bankName: details.bankName ?? null,
-      accountNumber: details.accountNumber ?? null,
-      ifsc: details.ifsc ?? null,
-      fiatCurrency: offer.fiatCurrency,
-      amountMinor: fiatTotalMinor.toString(),
-      note: "Demo-safe payment instructions. Verify receiver details before marking paid.",
-    };
-  }
-
   private buildPaymentProof(dto: MarkTradePaidDto, tradeId: string): Prisma.JsonObject {
     const paymentReference = dto.paymentReference?.trim();
     const proofFileName = dto.proofFileName?.trim();
@@ -119,15 +123,15 @@ export class TradesService {
           : {
               OR: [{ buyerId: userId }, { sellerId: userId }],
             },
-      include: {
+      select: {
+        ...TRADE_BASE_SELECT,
         offer: {
           select: {
             id: true,
             asset: true,
             fiatCurrency: true,
             paymentMethod: true,
-            paymentDetails: true,
-          } as any,
+          },
         },
         buyer: {
           select: {
@@ -158,7 +162,10 @@ export class TradesService {
   }
 
   async create(actorId: string, dto: CreateTradeDto) {
-    const offer = await this.prisma.offer.findUnique({ where: { id: dto.offerId } });
+    const offer = await this.prisma.offer.findUnique({
+      where: { id: dto.offerId },
+      select: OFFER_FOR_TRADE_SELECT,
+    });
 
     if (!offer || offer.status !== OfferStatus.ACTIVE) {
       throw new NotFoundException("Offer not found or unavailable");
@@ -203,8 +210,8 @@ export class TradesService {
           fiatTotalMinor,
           status: TradeStatus.OPEN,
           escrowHeldMinor: amountMinor,
-          paymentInstructions: this.buildPaymentInstructions(offer as any, fiatTotalMinor),
         } as any,
+        select: TRADE_BASE_SELECT,
       });
 
       await this.walletService.postTradeEscrowHold(tx, {
@@ -277,18 +284,18 @@ export class TradesService {
   async getByIdForParticipant(userId: string, role: "USER" | "ADMIN", id: string) {
     const trade = await this.prisma.trade.findUnique({
       where: { id },
-      include: {
+      select: {
+        ...TRADE_BASE_SELECT,
         offer: {
           select: {
             id: true,
             asset: true,
             fiatCurrency: true,
             paymentMethod: true,
-            paymentDetails: true,
             terms: true,
             minAmountMinor: true,
             maxAmountMinor: true,
-          } as any,
+          },
         },
         dispute: true,
         messages: {
@@ -324,7 +331,15 @@ export class TradesService {
   }
 
   async markPaid(actorId: string, tradeId: string, dto: MarkTradePaidDto = {}) {
-    const trade = await this.prisma.trade.findUnique({ where: { id: tradeId } });
+    const trade = await this.prisma.trade.findUnique({
+      where: { id: tradeId },
+      select: {
+        id: true,
+        buyerId: true,
+        sellerId: true,
+        status: true,
+      },
+    });
 
     if (!trade) {
       throw new NotFoundException("Trade not found");
@@ -346,8 +361,8 @@ export class TradesService {
         data: {
           status: TradeStatus.PAYMENT_SENT,
           paidAt: new Date(),
-          paymentProof,
         } as any,
+        select: TRADE_BASE_SELECT,
       });
 
       await tx.tradeMessage.create({
@@ -396,7 +411,16 @@ export class TradesService {
   }
 
   async releaseEscrow(actorId: string, role: "USER" | "ADMIN", tradeId: string) {
-    const trade = await this.prisma.trade.findUnique({ where: { id: tradeId } });
+    const trade = await this.prisma.trade.findUnique({
+      where: { id: tradeId },
+      select: {
+        id: true,
+        buyerId: true,
+        sellerId: true,
+        status: true,
+        escrowHeldMinor: true,
+      },
+    });
 
     if (!trade) {
       throw new NotFoundException("Trade not found");
@@ -427,16 +451,17 @@ export class TradesService {
         data: {
           status: TradeStatus.RELEASE_PENDING,
         },
+        select: { id: true },
       });
 
       const updated = await tx.trade.update({
         where: { id: trade.id },
         data: {
           status: TradeStatus.COMPLETED,
-          sellerPaymentConfirmedAt: new Date(),
           releasedAt: new Date(),
           completedAt: new Date(),
         } as any,
+        select: TRADE_BASE_SELECT,
       });
 
       await tx.tradeMessage.create({
@@ -505,7 +530,16 @@ export class TradesService {
   }
 
   async cancelTrade(actorId: string, tradeId: string) {
-    const trade = await this.prisma.trade.findUnique({ where: { id: tradeId } });
+    const trade = await this.prisma.trade.findUnique({
+      where: { id: tradeId },
+      select: {
+        id: true,
+        buyerId: true,
+        sellerId: true,
+        status: true,
+        escrowHeldMinor: true,
+      },
+    });
 
     if (!trade) {
       throw new NotFoundException("Trade not found");
@@ -543,6 +577,7 @@ export class TradesService {
           status: TradeStatus.CANCELLED,
           canceledAt: new Date(),
         },
+        select: TRADE_BASE_SELECT,
       });
 
       await tx.tradeMessage.create({
@@ -610,7 +645,13 @@ export class TradesService {
   async openDispute(actorId: string, tradeId: string, input?: OpenTradeDisputeDto | string) {
     const trade = await this.prisma.trade.findUnique({
       where: { id: tradeId },
-      include: { dispute: true },
+      select: {
+        id: true,
+        buyerId: true,
+        sellerId: true,
+        status: true,
+        dispute: true,
+      },
     });
 
     if (!trade) {
@@ -661,6 +702,7 @@ export class TradesService {
         data: {
           status: TradeStatus.DISPUTED,
         },
+        select: { id: true },
       });
 
       await tx.tradeMessage.create({
@@ -714,7 +756,15 @@ export class TradesService {
   }
 
   async forceRefundEscrow(adminId: string, tradeId: string) {
-    const trade = await this.prisma.trade.findUnique({ where: { id: tradeId } });
+    const trade = await this.prisma.trade.findUnique({
+      where: { id: tradeId },
+      select: {
+        id: true,
+        buyerId: true,
+        sellerId: true,
+        escrowHeldMinor: true,
+      },
+    });
 
     if (!trade) {
       throw new NotFoundException("Trade not found");
@@ -733,6 +783,7 @@ export class TradesService {
           status: TradeStatus.CANCELLED,
           canceledAt: new Date(),
         },
+        select: TRADE_BASE_SELECT,
       });
 
       await this.walletService.postTradeEscrowRefund(tx, {

@@ -1,10 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Clock3, Filter } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import { tokenStore } from "@/lib/api";
 import { friendlyErrorMessage } from "@/lib/errors";
-import { DEMO_DEPOSITS, DEMO_WALLET_SUMMARY, DEMO_WITHDRAWALS } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import {
   walletService,
@@ -15,6 +16,7 @@ import {
 } from "@/services/wallet.service";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { LoadingState } from "@/components/ui/loading-state";
 
 type HistoryFilter = "ALL" | "LEDGER" | "DEPOSIT" | "WITHDRAW";
 
@@ -82,6 +84,7 @@ function statusBadge(status?: string) {
 }
 
 export default function WalletHistoryPage() {
+  const { isAuthenticated, isBootstrapping } = useAuth();
   const [currency, setCurrency] = useState("INR");
   const [history, setHistory] = useState<UnifiedHistoryItem[]>([]);
   const [filter, setFilter] = useState<HistoryFilter>("ALL");
@@ -89,49 +92,63 @@ export default function WalletHistoryPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (isBootstrapping) return;
+    if (!isAuthenticated) {
+      setCurrency("INR");
+      setHistory([]);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
     (async () => {
-      const token = tokenStore.accessToken;
-
-      if (!token) {
-        setCurrency(DEMO_WALLET_SUMMARY.currency);
-        setHistory(buildHistory(DEMO_WALLET_SUMMARY.ledger, DEMO_DEPOSITS, DEMO_WITHDRAWALS));
-        setError("Showing demo wallet history. Use Try Demo to load signed-in activity.");
-        setLoading(false);
-        return;
-      }
-
       try {
+        const token = tokenStore.accessToken;
+        if (!token) {
+          setCurrency("INR");
+          setHistory([]);
+          setError("Wallet session unavailable. Showing safe history state.");
+          return;
+        }
+
         const [wallet, deposits, withdrawals] = await Promise.all([
           walletService.getWallet(token),
           walletService.listDeposits(token),
           walletService.listWithdrawals(token),
         ]);
-
-        const hasAnyHistory =
-          wallet.ledger.length > 0 || deposits.length > 0 || withdrawals.length > 0;
-
-        if (hasAnyHistory) {
-          setCurrency(wallet.currency);
-          setHistory(buildHistory(wallet.ledger, deposits, withdrawals));
-        } else {
-          setCurrency(DEMO_WALLET_SUMMARY.currency);
-          setHistory(buildHistory(DEMO_WALLET_SUMMARY.ledger, DEMO_DEPOSITS, DEMO_WITHDRAWALS));
-        }
+        setCurrency(wallet.currency);
+        setHistory(buildHistory(wallet.ledger, deposits, withdrawals));
         setError(null);
       } catch (err) {
-        setCurrency(DEMO_WALLET_SUMMARY.currency);
-        setHistory(buildHistory(DEMO_WALLET_SUMMARY.ledger, DEMO_DEPOSITS, DEMO_WITHDRAWALS));
+        setCurrency("INR");
+        setHistory([]);
         setError(friendlyErrorMessage(err, "Live wallet history is temporarily unavailable."));
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [isAuthenticated, isBootstrapping]);
 
   const filteredHistory = useMemo(() => {
     if (filter === "ALL") return history;
     return history.filter((item) => item.source === filter);
   }, [history, filter]);
+
+  if (isBootstrapping) {
+    return <LoadingState label="Loading wallet history workspace" />;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <section className="space-y-3">
+        <h1 className="text-2xl font-semibold text-white">Wallet History</h1>
+        <p className="text-sm text-slate-400">Your session is not active. Please log in to open wallet history.</p>
+        <Link href="/login?next=/wallet/history">
+          <Button>Go to login</Button>
+        </Link>
+      </section>
+    );
+  }
 
   return (
     <section className="space-y-6">
@@ -144,7 +161,7 @@ export default function WalletHistoryPage() {
       {error ? (
         <Card className="border-amber-500/30 bg-amber-950/20">
           <CardContent className="pt-6">
-            <p className="text-sm text-amber-200">Live history is unavailable. Showing demo-safe records.</p>
+            <p className="text-sm text-amber-200">Live history is currently unavailable.</p>
             <p className="mt-1 text-xs text-amber-300/80">{error}</p>
           </CardContent>
         </Card>

@@ -19,10 +19,8 @@ import {
 import { tokenStore } from "@/lib/api";
 import {
   DEMO_DASHBOARD_ACTIVITY,
-  DEMO_DASHBOARD_ASSET_BALANCES,
   DEMO_DASHBOARD_OFFERS,
   DEMO_DASHBOARD_TRADES,
-  DEMO_WALLET_SUMMARY,
   type DashboardActivityItem,
 } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
@@ -95,9 +93,16 @@ interface DashboardOfferRow {
   status: string;
 }
 
+const EMPTY_WALLET_SUMMARY: WalletSummary = {
+  currency: "INR",
+  availableBalanceMinor: "0",
+  escrowBalanceMinor: "0",
+  ledger: [],
+};
+
 export default function DashboardPage() {
   const { user, isAuthenticated, isBootstrapping } = useAuth();
-  const [wallet, setWallet] = useState<WalletSummary>(DEMO_WALLET_SUMMARY);
+  const [wallet, setWallet] = useState<WalletSummary | null>(null);
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [offers, setOffers] = useState<OfferRecord[]>([]);
   const [walletFallbackActive, setWalletFallbackActive] = useState(false);
@@ -114,7 +119,7 @@ export default function DashboardPage() {
     }
 
     if (!isAuthenticated) {
-      setWallet(DEMO_WALLET_SUMMARY);
+      setWallet(null);
       setTrades([]);
       setOffers([]);
       setWalletFallbackActive(false);
@@ -131,10 +136,10 @@ export default function DashboardPage() {
       setLoading(true);
       const token = tokenStore.accessToken;
       if (!token) {
-        setWallet(DEMO_WALLET_SUMMARY);
+        setWallet(null);
         setTrades([]);
         setOffers([]);
-        setWalletFallbackActive(true);
+        setWalletFallbackActive(false);
         setTradesFallbackActive(true);
         setOffersFallbackActive(true);
         setIsDemo(true);
@@ -152,7 +157,7 @@ export default function DashboardPage() {
       const issues: string[] = [];
       let demoFallback = false;
 
-      const walletValue = walletResult.status === "fulfilled" ? walletResult.value : DEMO_WALLET_SUMMARY;
+      const walletValue = walletResult.status === "fulfilled" ? walletResult.value : null;
       const tradesValue = tradesResult.status === "fulfilled" ? tradesResult.value : [];
       const offersValue = offersResult.status === "fulfilled" ? offersResult.value : [];
       const walletFallback = walletResult.status !== "fulfilled";
@@ -162,7 +167,7 @@ export default function DashboardPage() {
       if (walletResult.status === "fulfilled") {
         setWallet(walletValue);
       } else {
-        setWallet(walletValue);
+        setWallet(null);
         demoFallback = true;
         issues.push("wallet");
       }
@@ -192,7 +197,7 @@ export default function DashboardPage() {
         const notificationsPayload = await notificationService.list({
           token,
           userId: user.id,
-          wallet: walletValue,
+          wallet: walletValue ?? EMPTY_WALLET_SUMMARY,
           trades: tradesValue,
           offers: ownOfferSource,
           scope: "P2P",
@@ -212,8 +217,9 @@ export default function DashboardPage() {
     })();
   }, [isAuthenticated, isBootstrapping, user?.id]);
 
-  const available = BigInt(wallet.availableBalanceMinor || "0");
-  const locked = BigInt(wallet.escrowBalanceMinor || "0");
+  const walletSnapshot = wallet ?? EMPTY_WALLET_SUMMARY;
+  const available = BigInt(walletSnapshot.availableBalanceMinor || "0");
+  const locked = BigInt(walletSnapshot.escrowBalanceMinor || "0");
   const total = available + locked;
   const ownOffers = user?.id ? offers.filter((offer) => offer.userId === user.id) : [];
   const activeTradesCount = trades.filter((trade) => ACTIVE_TRADE_STATUSES.has(trade.status.toUpperCase())).length;
@@ -278,7 +284,7 @@ export default function DashboardPage() {
   const activity: DashboardActivityItem[] = useMemo(() => {
     const liveActivity: DashboardActivityItem[] = [];
 
-    wallet.ledger.slice(0, 5).forEach((item) => {
+    walletSnapshot.ledger.slice(0, 5).forEach((item) => {
       const upper = item.type.toUpperCase();
       let type: DashboardActivityItem["type"] = "DEPOSIT";
       if (upper.includes("WITHDRAWAL")) type = "WITHDRAWAL";
@@ -329,23 +335,23 @@ export default function DashboardPage() {
     return liveActivity
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, 6);
-  }, [wallet.ledger, trades, ownOffers, useDemoActivityFallback]);
+  }, [walletSnapshot.ledger, trades, ownOffers, useDemoActivityFallback]);
 
   const unreadCount = notifications.filter((item) => !item.read).length;
 
   const assetBalances = useMemo(
     () => {
       const primaryAsset = {
-        asset: wallet.currency,
+        asset: walletSnapshot.currency,
         network: "Primary Wallet",
         availableMinor: available.toString(),
         lockedMinor: locked.toString(),
         changePct24h: 0,
       };
 
-      return walletFallbackActive ? [primaryAsset, ...DEMO_DASHBOARD_ASSET_BALANCES] : [primaryAsset];
+      return [primaryAsset];
     },
-    [wallet.currency, available, locked, walletFallbackActive],
+    [walletSnapshot.currency, available, locked],
   );
 
   async function markNotificationRead(id: string) {
@@ -456,7 +462,7 @@ export default function DashboardPage() {
                 <CardDescription>Total Portfolio</CardDescription>
               </CardHeader>
               <CardContent>
-                <p className="text-xl font-semibold text-white">{formatMinorUnits(total.toString(), wallet.currency)}</p>
+                <p className="text-xl font-semibold text-white">{formatMinorUnits(total.toString(), walletSnapshot.currency)}</p>
               </CardContent>
             </Card>
             <Card>
@@ -464,7 +470,7 @@ export default function DashboardPage() {
                 <CardDescription>Available</CardDescription>
               </CardHeader>
               <CardContent>
-                <p className="text-xl font-semibold text-emerald-300">{formatMinorUnits(available.toString(), wallet.currency)}</p>
+                <p className="text-xl font-semibold text-emerald-300">{formatMinorUnits(available.toString(), walletSnapshot.currency)}</p>
               </CardContent>
             </Card>
             <Card>
@@ -472,7 +478,7 @@ export default function DashboardPage() {
                 <CardDescription>Locked</CardDescription>
               </CardHeader>
               <CardContent>
-                <p className="text-xl font-semibold text-lime-300">{formatMinorUnits(locked.toString(), wallet.currency)}</p>
+                <p className="text-xl font-semibold text-lime-300">{formatMinorUnits(locked.toString(), walletSnapshot.currency)}</p>
               </CardContent>
             </Card>
             <Card>

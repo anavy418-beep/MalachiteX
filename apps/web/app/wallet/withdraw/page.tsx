@@ -1,10 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { ArrowUpFromLine, Clock3 } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import { tokenStore } from "@/lib/api";
 import { friendlyErrorMessage } from "@/lib/errors";
-import { DEMO_WITHDRAWALS } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import { walletService, type WithdrawalRecord } from "@/services/wallet.service";
 import { Alert } from "@/components/ui/alert";
@@ -12,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { LoadingState } from "@/components/ui/loading-state";
 
 function statusBadge(status: string) {
   const normalized = status.toUpperCase();
@@ -32,37 +34,27 @@ function statusBadge(status: string) {
 }
 
 export default function WalletWithdrawPage() {
+  const { isAuthenticated, isBootstrapping } = useAuth();
   const [records, setRecords] = useState<WithdrawalRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [isDemo, setIsDemo] = useState(false);
 
   async function loadRecords() {
-    const token = tokenStore.accessToken;
-
-    if (!token) {
-      setRecords(DEMO_WITHDRAWALS);
-      setIsDemo(true);
-      setError("Showing demo withdrawal records. Use Try Demo to test an authenticated request.");
-      setLoading(false);
-      return;
-    }
-
     try {
-      const payload = await walletService.listWithdrawals(token);
-      if (payload.length === 0) {
-        setRecords(DEMO_WITHDRAWALS);
-        setIsDemo(true);
-      } else {
-        setRecords(payload);
-        setIsDemo(false);
+      const token = tokenStore.accessToken;
+      if (!token) {
+        setRecords([]);
+        setError("Wallet session unavailable. Showing safe withdrawal history state.");
+        return;
       }
+
+      const payload = await walletService.listWithdrawals(token);
+      setRecords(payload);
       setError(null);
     } catch (err) {
-      setRecords(DEMO_WITHDRAWALS);
-      setIsDemo(true);
+      setRecords([]);
       setError(friendlyErrorMessage(err, "Live withdrawal history is temporarily unavailable."));
     } finally {
       setLoading(false);
@@ -70,16 +62,21 @@ export default function WalletWithdrawPage() {
   }
 
   useEffect(() => {
-    loadRecords();
-  }, []);
+    if (isBootstrapping) return;
+    if (!isAuthenticated) {
+      setLoading(false);
+      setRecords([]);
+      return;
+    }
+    void loadRecords();
+  }, [isAuthenticated, isBootstrapping]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     setSuccess(null);
 
-    const token = tokenStore.accessToken;
-    if (!token) {
+    if (!isAuthenticated) {
       setError("Login required for live withdrawal submission.");
       return;
     }
@@ -87,6 +84,12 @@ export default function WalletWithdrawPage() {
     const formData = new FormData(event.currentTarget);
     const amountMinor = String(formData.get("amountMinor") ?? "");
     const destination = String(formData.get("destination") ?? "");
+    const token = tokenStore.accessToken;
+
+    if (!token) {
+      setError("Wallet session unavailable. Please sign in again.");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -99,6 +102,22 @@ export default function WalletWithdrawPage() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (isBootstrapping) {
+    return <LoadingState label="Loading wallet withdrawal workspace" />;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <section className="space-y-3">
+        <h1 className="text-2xl font-semibold text-white">Wallet Withdraw</h1>
+        <p className="text-sm text-slate-400">Your session is not active. Please log in to open withdrawal controls.</p>
+        <Link href="/login?next=/wallet/withdraw">
+          <Button>Go to login</Button>
+        </Link>
+      </section>
+    );
   }
 
   return (
@@ -186,9 +205,7 @@ export default function WalletWithdrawPage() {
           ) : null}
         </CardContent>
       </Card>
-      {isDemo ? (
-        <p className="text-xs text-amber-300/80">Showing demo withdrawal records for staging walkthrough.</p>
-      ) : null}
+      <p className="text-xs text-emerald-300/80">Withdrawal records are persisted and loaded from wallet history.</p>
     </section>
   );
 }

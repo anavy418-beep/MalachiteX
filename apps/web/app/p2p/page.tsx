@@ -15,7 +15,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  DEMO_P2P_OFFERS,
   P2P_ASSET_OPTIONS,
   P2P_CURRENCY_OPTIONS,
   P2P_PAYMENT_OPTIONS,
@@ -152,7 +151,6 @@ export default function P2PPage() {
   const [loading, setLoading] = useState(true);
   const [submittingOfferId, setSubmittingOfferId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isDemo, setIsDemo] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [selectedOffer, setSelectedOffer] = useState<MarketOffer | null>(null);
   const [tradeAmountMinor, setTradeAmountMinor] = useState("");
@@ -164,18 +162,11 @@ export default function P2PPage() {
     setError(null);
 
     try {
-      const payload = await offersService.list();
-      if (payload.length === 0) {
-        setOffers(DEMO_P2P_OFFERS);
-        setIsDemo(true);
-      } else {
-        setOffers(payload.map(toPreview));
-        setIsDemo(false);
-      }
+      const payload = await offersService.list({ includeLocalDemoFallback: false });
+      setOffers(payload.map(toPreview));
     } catch (err) {
-      setOffers(DEMO_P2P_OFFERS);
-      setIsDemo(true);
-      setError(friendlyErrorMessage(err, "Live P2P offers are temporarily unavailable. Showing demo offers."));
+      setOffers([]);
+      setError(friendlyErrorMessage(err, "Live P2P offers are temporarily unavailable."));
     } finally {
       setLoading(false);
     }
@@ -186,7 +177,6 @@ export default function P2PPage() {
       setLoading(false);
       setOffers([]);
       setError(null);
-      setIsDemo(false);
       return;
     }
 
@@ -781,8 +771,6 @@ export default function P2PPage() {
           </Card>
         </div>
       ) : null}
-
-      {isDemo ? <p className="text-xs text-amber-300/80">Showing demo market offers for preview.</p> : null}
     </section>
   );
 }

@@ -101,14 +101,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (input: LoginInput) => {
     const result = await authService.login(input);
-    setUser(result.user);
-    return result.user;
+    try {
+      const verifiedUser = await authService.getCurrentUser();
+      setUser(verifiedUser);
+      return verifiedUser;
+    } catch (error) {
+      const status = (error as Error & { status?: number }).status;
+      if (status === 401 || status === 403) {
+        tokenStore.clear();
+        setUser(null);
+        throw new Error("Session could not be established. Please sign in again.");
+      }
+
+      setUser(result.user);
+      return result.user;
+    }
   }, []);
 
   const signup = useCallback(async (input: SignupInput) => {
     const result = await authService.signup(input);
-    setUser(result.user);
-    return result.user;
+    try {
+      const verifiedUser = await authService.getCurrentUser();
+      setUser(verifiedUser);
+      return verifiedUser;
+    } catch (error) {
+      const status = (error as Error & { status?: number }).status;
+      if (status === 401 || status === 403) {
+        tokenStore.clear();
+        setUser(null);
+        throw new Error("Session could not be established. Please sign in again.");
+      }
+
+      setUser(result.user);
+      return result.user;
+    }
   }, []);
 
   const logout = useCallback(async () => {
