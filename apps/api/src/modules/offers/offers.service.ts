@@ -11,6 +11,28 @@ import { AuditService } from "@/modules/audit/audit.service";
 import { NotificationsService } from "@/modules/notifications/notifications.service";
 import { CreateOfferDto } from "./dto/create-offer.dto";
 
+const OFFER_RESPONSE_SELECT = {
+  id: true,
+  userId: true,
+  type: true,
+  status: true,
+  asset: true,
+  fiatCurrency: true,
+  priceMinor: true,
+  minAmountMinor: true,
+  maxAmountMinor: true,
+  paymentMethod: true,
+  terms: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.OfferSelect;
+
+const OFFER_OWNER_SELECT = {
+  id: true,
+  userId: true,
+  status: true,
+} satisfies Prisma.OfferSelect;
+
 @Injectable()
 export class OffersService {
   private readonly logger = new Logger(OffersService.name);
@@ -37,12 +59,11 @@ export class OffersService {
       terms: string | null;
       createdAt: Date;
       updatedAt: Date;
-      user?: { username: string } | null;
     },
   ) {
     return {
       ...offer,
-      merchantName: offer.user?.username ?? `Trader ${offer.userId.slice(0, 6).toUpperCase()}`,
+      merchantName: `Trader ${offer.userId.slice(0, 6).toUpperCase()}`,
       priceMinor: offer.priceMinor.toString(),
       minAmountMinor: offer.minAmountMinor.toString(),
       maxAmountMinor: offer.maxAmountMinor.toString(),
@@ -65,7 +86,7 @@ export class OffersService {
   async listActive() {
     const offers = await this.prisma.offer.findMany({
       where: { status: OfferStatus.ACTIVE },
-      include: { user: { select: { username: true } } },
+      select: OFFER_RESPONSE_SELECT,
       orderBy: { createdAt: "desc" },
       take: 200,
     });
@@ -79,7 +100,7 @@ export class OffersService {
         userId,
         status: { notIn: [OfferStatus.ARCHIVED, OfferStatus.CLOSED] },
       },
-      include: { user: { select: { username: true } } },
+      select: OFFER_RESPONSE_SELECT,
       orderBy: { createdAt: "desc" },
       take: 200,
     });
@@ -115,7 +136,7 @@ export class OffersService {
         paymentDetails,
         terms: dto.terms,
       } as any,
-      include: { user: { select: { username: true } } },
+      select: OFFER_RESPONSE_SELECT,
     });
 
     this.logger.log(`Offer ${offer.id} created by ${userId}`);
@@ -144,7 +165,10 @@ export class OffersService {
       throw new BadRequestException("Use archive endpoint to archive offers.");
     }
 
-    const offer = await this.prisma.offer.findUnique({ where: { id } });
+    const offer = await this.prisma.offer.findUnique({
+      where: { id },
+      select: OFFER_OWNER_SELECT,
+    });
     if (!offer) {
       throw new NotFoundException("Offer not found");
     }
@@ -158,7 +182,7 @@ export class OffersService {
     const updated = await this.prisma.offer.update({
       where: { id },
       data: { status },
-      include: { user: { select: { username: true } } },
+      select: OFFER_RESPONSE_SELECT,
     });
 
     await this.auditService.log({
@@ -183,7 +207,10 @@ export class OffersService {
   }
 
   async archive(userId: string, id: string) {
-    const offer = await this.prisma.offer.findUnique({ where: { id } });
+    const offer = await this.prisma.offer.findUnique({
+      where: { id },
+      select: OFFER_OWNER_SELECT,
+    });
     if (!offer) {
       throw new NotFoundException("Offer not found");
     }
@@ -197,7 +224,7 @@ export class OffersService {
     const archived = await this.prisma.offer.update({
       where: { id },
       data: { status: OfferStatus.ARCHIVED },
-      include: { user: { select: { username: true } } },
+      select: OFFER_RESPONSE_SELECT,
     });
 
     await this.auditService.log({

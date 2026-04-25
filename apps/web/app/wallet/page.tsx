@@ -4,9 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDownToLine, ArrowUpFromLine, Clock3, History, QrCode } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
-import { tokenStore } from "@/lib/api";
 import { friendlyErrorMessage } from "@/lib/errors";
-import { DEMO_WALLET_SUMMARY } from "@/lib/demo-data";
 import { formatDateTime, formatMinorUnits } from "@/lib/money";
 import {
   getWalletNetworkLabel,
@@ -21,13 +19,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { LoadingState } from "@/components/ui/loading-state";
 
 const NETWORKS: WalletNetwork[] = ["ERC20", "TRC20", "BTC"];
+const EMPTY_WALLET_SUMMARY: WalletSummary = {
+  currency: "INR",
+  availableBalanceMinor: "0",
+  escrowBalanceMinor: "0",
+  ledger: [],
+};
 
 export default function WalletPage() {
   const { isAuthenticated, isBootstrapping } = useAuth();
   const [wallet, setWallet] = useState<WalletSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isDemo, setIsDemo] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
   const [selectedNetwork, setSelectedNetwork] = useState<WalletNetwork>("ERC20");
@@ -40,7 +43,6 @@ export default function WalletPage() {
     if (!isAuthenticated) {
       setWallet(null);
       setError(null);
-      setIsDemo(false);
       setLoading(false);
       return;
     }
@@ -49,32 +51,15 @@ export default function WalletPage() {
 
     const loadWallet = async () => {
       setLoading(true);
-      const token = tokenStore.accessToken;
-      if (!token) {
-        if (!active) return;
-        setWallet(DEMO_WALLET_SUMMARY);
-        setIsDemo(true);
-        setError("Live wallet session is syncing. Showing your wallet preview until session access is ready.");
-        setLoading(false);
-        return;
-      }
 
       try {
-        const payload = await walletService.getWallet(token);
+        const payload = await walletService.getWallet();
         if (!active) return;
-        const hasLiveBalance =
-          BigInt(payload.availableBalanceMinor || "0") > 0n || BigInt(payload.escrowBalanceMinor || "0") > 0n;
-
-        if (payload.ledger.length === 0 && !hasLiveBalance) {
-          setWallet(DEMO_WALLET_SUMMARY);
-          setIsDemo(true);
-        } else {
-          setWallet(payload);
-        }
+        setWallet(payload);
+        setError(null);
       } catch (err) {
         if (!active) return;
-        setWallet(DEMO_WALLET_SUMMARY);
-        setIsDemo(true);
+        setWallet(null);
         setError(friendlyErrorMessage(err, "Live wallet data is temporarily unavailable."));
       } finally {
         if (active) {
@@ -90,7 +75,7 @@ export default function WalletPage() {
     };
   }, [isAuthenticated, isBootstrapping]);
 
-  const current = wallet ?? DEMO_WALLET_SUMMARY;
+  const current = wallet ?? EMPTY_WALLET_SUMMARY;
   const available = BigInt(current.availableBalanceMinor || "0");
   const escrow = BigInt(current.escrowBalanceMinor || "0");
   const total = available + escrow;
@@ -107,16 +92,13 @@ export default function WalletPage() {
   const assetRows = useMemo(
     () => [
       {
-        asset: current.currency,
+        asset: current?.currency ?? "INR",
         balanceMinor: total.toString(),
         availableMinor: available.toString(),
         lockedMinor: escrow.toString(),
       },
-      // TODO(step-9): Replace with multi-asset wallet endpoint when available.
-      { asset: "USDT", balanceMinor: "530000", availableMinor: "500000", lockedMinor: "30000" },
-      { asset: "BTC", balanceMinor: "750000", availableMinor: "700000", lockedMinor: "50000" },
     ],
-    [current.currency, total, available, escrow],
+    [current?.currency, total, available, escrow],
   );
 
   async function copyText(value: string, field: string) {
@@ -138,9 +120,23 @@ export default function WalletPage() {
       <section className="space-y-3">
         <h1 className="text-2xl font-semibold text-white">Wallet</h1>
         <p className="text-sm text-slate-400">Your session is not active. Please log in to open wallet controls.</p>
-        <Link href="/login">
+        <Link href="/login?next=/wallet">
           <Button>Go to login</Button>
         </Link>
+      </section>
+    );
+  }
+
+  if (!wallet && !loading && error) {
+    return (
+      <section className="space-y-3">
+        <h1 className="text-2xl font-semibold text-white">Wallet</h1>
+        <p className="text-sm text-slate-400">
+          We could not load your wallet right now. Please refresh or try again in a moment.
+        </p>
+        <Button variant="outline" onClick={() => window.location.reload()}>
+          Retry
+        </Button>
       </section>
     );
   }
@@ -157,9 +153,26 @@ export default function WalletPage() {
         <Card className="border-amber-500/30 bg-amber-950/20">
           <CardContent className="pt-6">
             <p className="text-sm text-amber-200">
-              Live wallet data is unavailable. Showing stable demo wallet data.
+              Live wallet data is temporarily unavailable. Balances are hidden until sync recovers.
             </p>
             <p className="mt-1 text-xs text-amber-300/80">{error}</p>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {total === 0n ? (
+        <Card className="border-dashed border-zinc-700 bg-zinc-950/60">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-6">
+            <div>
+              <p className="text-base font-medium text-white">No funds yet</p>
+              <p className="text-sm text-slate-400">Deposit funds to start trading</p>
+            </div>
+            <Link href="/wallet/deposit">
+              <Button className="gap-2">
+                <ArrowDownToLine className="h-4 w-4" />
+                Deposit Funds
+              </Button>
+            </Link>
           </CardContent>
         </Card>
       ) : null}
@@ -208,7 +221,7 @@ export default function WalletPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Wallet Identity</CardTitle>
-          <CardDescription>Deterministic wallet ID and deposit addresses for demo and live fallback.</CardDescription>
+          <CardDescription>Deterministic wallet ID and deposit addresses for your wallet profile.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
@@ -245,7 +258,7 @@ export default function WalletPage() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs uppercase tracking-wide text-slate-400">Deposit Address</p>
                 <span className="rounded-full border border-emerald-700/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200">
-                  {selectedAsset} · {getWalletNetworkLabel(selectedNetwork)}
+                  {selectedAsset} - {getWalletNetworkLabel(selectedNetwork)}
                 </span>
               </div>
               <CopyableValueRow
@@ -274,7 +287,7 @@ export default function WalletPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Quick Actions</CardTitle>
-          <CardDescription>Wallet operations for demo flow</CardDescription>
+          <CardDescription>Wallet operations backed by persisted ledger entries</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
           <Link href="/wallet/deposit">
@@ -301,7 +314,7 @@ export default function WalletPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Asset Balances</CardTitle>
-          <CardDescription>Summary table for major wallet assets</CardDescription>
+          <CardDescription>Persisted wallet balances from your primary account</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           <table className="min-w-full text-left text-sm">
@@ -356,7 +369,6 @@ export default function WalletPage() {
       </Card>
 
       {loading ? <p className="text-xs text-slate-500">Refreshing wallet data...</p> : null}
-      {isDemo ? <p className="text-xs text-amber-300/80">Demo mode enabled for wallet preview.</p> : null}
 
       <AddressQrModal
         open={showQr}
@@ -367,4 +379,5 @@ export default function WalletPage() {
     </section>
   );
 }
+
 

@@ -11,10 +11,9 @@ import { Button } from "@/components/ui/button";
 const navLinks = [
   { href: "/", label: "Home" },
   { href: "/markets", label: "Live Market" },
-  { href: "/demo-trading", label: "Trade" },
+  { href: "/trades", label: "Trade" },
   { href: "/wallet", label: "Wallet" },
   { href: "/p2p", label: "P2P" },
-  { href: "/dashboard", label: "Dashboard" },
 ];
 
 export function Navbar() {
@@ -94,7 +93,7 @@ export function Navbar() {
             </>
           ) : (
             <>
-              <Link className="hidden sm:inline-flex" href="/login?demo=1&next=/dashboard" prefetch={false}>
+              <Link className="hidden sm:inline-flex" href="/login?demo=1&next=/wallet" prefetch={false}>
                 <Button variant="outline" size="sm" className="gap-2">
                   <Sparkles className="h-4 w-4" />
                   Try Demo

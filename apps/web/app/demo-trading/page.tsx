@@ -18,6 +18,7 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { tokenStore } from "@/lib/api";
 import { friendlyErrorMessage } from "@/lib/errors";
+import { formatMinorUnits } from "@/lib/money";
 import {
   buildMarketSelectionPath,
   DEFAULT_SUPPORTED_MARKET_SYMBOLS,
@@ -43,6 +44,7 @@ import {
   type MarketTickerSnapshot,
 } from "@/services/markets.service";
 import { paperTradingService, type PaperTradingAccountSummary } from "@/services/paper-trading.service";
+import { walletService, type WalletSummary } from "@/services/wallet.service";
 
 const SCALE_FACTOR = 100000000n;
 const LEVERAGE_OPTIONS = ["1", "2", "5", "10"] as const;
@@ -54,6 +56,14 @@ const DEFAULT_QUOTE_ASSET = "USDT";
 const DEFAULT_BASE_ASSET = "BTC";
 const BINANCE_DEPTH_LIMIT = 20;
 const BINANCE_DEPTH_RECONNECT_MS = 2_000;
+const REAL_WALLET_REFRESH_MS = 15_000;
+
+const EMPTY_REAL_WALLET: WalletSummary = {
+  currency: "USDT",
+  availableBalanceMinor: "0",
+  escrowBalanceMinor: "0",
+  ledger: [],
+};
 
 function formatSigned(value: string) {
   const parsed = Number.parseFloat(value);
@@ -488,6 +498,10 @@ function DemoTradingPageContent() {
   const [paperAccount, setPaperAccount] = useState<PaperTradingAccountSummary | null>(() =>
     buildFallbackPaperAccountSummary(),
   );
+  const [accountMode, setAccountMode] = useState<"DEMO" | "REAL">("DEMO");
+  const [realWallet, setRealWallet] = useState<WalletSummary | null>(null);
+  const [realWalletError, setRealWalletError] = useState<string | null>(null);
+  const [realWalletLoading, setRealWalletLoading] = useState(false);
   const [positionType, setPositionType] = useState<"LONG" | "SHORT">("LONG");
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET");
@@ -530,6 +544,11 @@ function DemoTradingPageContent() {
     () => deriveMarkPrice(orderBook, marketPair?.lastPrice ?? null) ?? "",
     [marketPair?.lastPrice, orderBook],
   );
+  const realWalletSummary = realWallet ?? EMPTY_REAL_WALLET;
+  const realAvailableMinor = BigInt(realWalletSummary.availableBalanceMinor || "0");
+  const realEscrowMinor = BigInt(realWalletSummary.escrowBalanceMinor || "0");
+  const realTotalMinor = realAvailableMinor + realEscrowMinor;
+  const realHasFunds = realAvailableMinor > 0n;
   const referencePrice = orderType === "LIMIT" && limitPrice ? limitPrice : markReferencePrice;
 
   const estimatedNotional = useMemo(() => {
@@ -546,14 +565,20 @@ function DemoTradingPageContent() {
     if (!Number.isFinite(price) || !Number.isFinite(qty) || !Number.isFinite(leverageValue)) return "0";
     return formatCompact(String((price * qty) / leverageValue));
   }, [leverage, quantity, referencePrice]);
+  const tradingBalance = useMemo(() => {
+    if (accountMode === "REAL") {
+      return Number(realAvailableMinor) / 100;
+    }
+    return Number.parseFloat(paperAccount?.account.balance ?? "0");
+  }, [accountMode, paperAccount?.account.balance, realAvailableMinor]);
   const maxQuantityForSelectedLeverage = useMemo(() => {
-    const balance = Number.parseFloat(paperAccount?.account.balance ?? "0");
+    const balance = tradingBalance;
     const price = Number.parseFloat(referencePrice);
     const leverageValue = Number.parseInt(leverage, 10);
     if (!Number.isFinite(balance) || !Number.isFinite(price) || !Number.isFinite(leverageValue)) return 0;
     if (balance <= 0 || price <= 0 || leverageValue <= 0) return 0;
     return (balance * leverageValue) / price;
-  }, [leverage, paperAccount?.account.balance, referencePrice]);
+  }, [leverage, referencePrice, tradingBalance]);
   const estimatedLiquidationPrice = useMemo(
     () => estimateLiquidation(referencePrice, leverage, positionType),
     [leverage, positionType, referencePrice],
@@ -604,6 +629,13 @@ function DemoTradingPageContent() {
   );
   const isSelectionSynced =
     querySelection.symbol === selectedSymbol && querySelection.interval === selectedInterval;
+
+  useEffect(() => {
+    setError(null);
+    if (accountMode === "REAL") {
+      setAccountMissing(false);
+    }
+  }, [accountMode]);
 
   useEffect(() => {
     setSelectedSymbol((current) =>
@@ -1055,21 +1087,72 @@ function DemoTradingPageContent() {
       return;
     }
 
+    if (accountMode !== "DEMO") {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     void refreshAccount({ autoCreateIfMissing: true });
-  }, [isAuthenticated, isBootstrapping]);
+  }, [accountMode, isAuthenticated, isBootstrapping]);
 
   useEffect(() => {
-    if (!isAuthenticated || accountMissing || !paperAccount) return;
+    if (accountMode !== "DEMO" || !isAuthenticated || accountMissing || !paperAccount) return;
 
     const timer = setInterval(() => {
       void refreshAccount();
     }, 8000);
 
     return () => clearInterval(timer);
-  }, [accountMissing, isAuthenticated, paperAccount]);
+  }, [accountMissing, accountMode, isAuthenticated, paperAccount]);
+
+  useEffect(() => {
+    if (!isAuthenticated || isBootstrapping || accountMode !== "REAL") {
+      return;
+    }
+
+    let active = true;
+
+    const loadRealWallet = async () => {
+      setRealWalletLoading(true);
+      try {
+        const payload = await walletService.getWallet();
+        if (!active) return;
+        setRealWallet({
+          currency: payload?.currency || "USDT",
+          availableBalanceMinor: payload?.availableBalanceMinor || "0",
+          escrowBalanceMinor: payload?.escrowBalanceMinor || "0",
+          walletId: payload?.walletId,
+          depositAddresses: payload?.depositAddresses,
+          ledger: payload?.ledger ?? [],
+        });
+        setRealWalletError(null);
+      } catch (err) {
+        if (!active) return;
+        setRealWallet((current) => current ?? EMPTY_REAL_WALLET);
+        setRealWalletError(friendlyErrorMessage(err, "Unable to refresh your real wallet right now."));
+      } finally {
+        if (active) {
+          setRealWalletLoading(false);
+        }
+      }
+    };
+
+    void loadRealWallet();
+    const timer = window.setInterval(() => {
+      void loadRealWallet();
+    }, REAL_WALLET_REFRESH_MS);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [accountMode, isAuthenticated, isBootstrapping]);
 
   async function handleCreateAccount() {
+    if (accountMode !== "DEMO") {
+      return;
+    }
     const token = tokenStore.accessToken;
     if (!token) return;
 
@@ -1088,6 +1171,15 @@ function DemoTradingPageContent() {
   }
 
   async function handleSubmitOrder() {
+    if (accountMode === "REAL") {
+      if (!realHasFunds) {
+        setError("No real funds available. Deposit funds to trade.");
+        return;
+      }
+      router.push("/trade");
+      return;
+    }
+
     const token = tokenStore.accessToken;
     if (!token) return;
 
@@ -1118,6 +1210,9 @@ function DemoTradingPageContent() {
   }
 
   async function handleClosePosition(symbol: string) {
+    if (accountMode !== "DEMO") {
+      return;
+    }
     const token = tokenStore.accessToken;
     if (!token) return;
 
@@ -1135,6 +1230,9 @@ function DemoTradingPageContent() {
   }
 
   async function handleCancelOrder(orderId: string) {
+    if (accountMode !== "DEMO") {
+      return;
+    }
     const token = tokenStore.accessToken;
     if (!token) return;
 
@@ -1152,6 +1250,9 @@ function DemoTradingPageContent() {
   }
 
   async function handleUpdateRisk(symbol: string, positionId: string) {
+    if (accountMode !== "DEMO") {
+      return;
+    }
     const token = tokenStore.accessToken;
     if (!token) return;
 
@@ -1262,8 +1363,10 @@ function DemoTradingPageContent() {
       <header className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Xorviqa Paper Trading</p>
-            <h1 className="text-3xl font-semibold text-white">Demo Trading Desk</h1>
+            <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Xorviqa Trading Workspace</p>
+            <h1 className="text-3xl font-semibold text-white">
+              {accountMode === "DEMO" ? "Demo Trading Desk" : "Real Account Preview"}
+            </h1>
           </div>
           <span
             className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs ${
@@ -1276,10 +1379,46 @@ function DemoTradingPageContent() {
             {isSocketConnected ? "LIVE" : "RECONNECTING"}
           </span>
         </div>
+        <div className="inline-flex rounded-xl border border-zinc-700 bg-zinc-950/70 p-1">
+          <button
+            onClick={() => setAccountMode("DEMO")}
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+              accountMode === "DEMO" ? "bg-emerald-600 text-white" : "text-slate-300"
+            }`}
+          >
+            Demo Account
+          </button>
+          <button
+            onClick={() => setAccountMode("REAL")}
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+              accountMode === "REAL" ? "bg-emerald-600 text-white" : "text-slate-300"
+            }`}
+          >
+            Real Account
+          </button>
+        </div>
         <p className="text-sm text-slate-400">
-          Broker-style simulated trading with live market pricing, isolated leverage, and no real-money execution.
+          {accountMode === "DEMO"
+            ? "Demo mode uses virtual funds only. Real wallet balances are never changed."
+            : "Real mode reads your actual wallet balance only. Demo funds are completely excluded."}
         </p>
-        {loading ? <p className="text-xs text-slate-500">Syncing demo account in the background...</p> : null}
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span
+            className={`rounded-full border px-2.5 py-1 ${
+              accountMode === "DEMO"
+                ? "border-emerald-700/40 bg-emerald-500/10 text-emerald-200"
+                : "border-sky-700/40 bg-sky-500/10 text-sky-200"
+            }`}
+          >
+            {accountMode === "DEMO" ? "Demo funds" : "Real wallet"}
+          </span>
+          {loading && accountMode === "DEMO" ? (
+            <span className="text-slate-500">Syncing demo account in the background...</span>
+          ) : null}
+          {realWalletLoading && accountMode === "REAL" ? (
+            <span className="text-slate-500">Refreshing real wallet balance...</span>
+          ) : null}
+        </div>
       </header>
 
       {error ? (
@@ -1290,7 +1429,7 @@ function DemoTradingPageContent() {
         </Card>
       ) : null}
 
-      {accountMissing ? (
+      {accountMode === "DEMO" && accountMissing ? (
         <Card className="border-emerald-900/50 bg-gradient-to-br from-emerald-950/40 via-zinc-950 to-zinc-900">
           <CardContent className="space-y-4 pt-6">
             <div className="flex items-start gap-3">
@@ -1312,7 +1451,67 @@ function DemoTradingPageContent() {
         </Card>
       ) : null}
 
-      {paperAccount ? (
+      {accountMode === "REAL" ? (
+        <>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <SummaryCard
+              title="Available (Real Wallet)"
+              value={formatMinorUnits(realAvailableMinor.toString(), realWalletSummary.currency)}
+              accent="text-white"
+            />
+            <SummaryCard
+              title="Escrow (Real Wallet)"
+              value={formatMinorUnits(realEscrowMinor.toString(), realWalletSummary.currency)}
+              accent="text-slate-100"
+            />
+            <SummaryCard
+              title="Total (Real Wallet)"
+              value={formatMinorUnits(realTotalMinor.toString(), realWalletSummary.currency)}
+              accent="text-emerald-300"
+            />
+          </div>
+
+          {realWalletError ? (
+            <Card className="border-amber-700/30 bg-amber-950/20">
+              <CardContent className="pt-6">
+                <p className="text-sm text-amber-200">
+                  Real wallet sync is delayed. Showing last known wallet snapshot.
+                </p>
+                <p className="mt-1 text-xs text-amber-300/80">{realWalletError}</p>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Real Account Trading</CardTitle>
+              <CardDescription>
+                Real mode uses your actual wallet only. Demo balance is not available in this mode.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!realHasFunds ? (
+                <div className="rounded-xl border border-dashed border-zinc-700 px-4 py-6 text-sm text-slate-400">
+                  <p className="text-base font-medium text-white">No real funds available. Deposit funds to trade.</p>
+                  <p className="mt-2">No funds yet. Deposit funds to start trading.</p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-emerald-700/30 bg-emerald-950/20 px-4 py-4 text-sm text-emerald-100">
+                  Real wallet funded. Continue to the live trade desk for real execution.
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Link href="/wallet/deposit">
+                  <Button>Deposit Funds</Button>
+                </Link>
+                <Button onClick={() => router.push("/trade")} variant="outline" disabled={!realHasFunds}>
+                  Open Real Trade Desk
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      ) : paperAccount ? (
         <>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             <SummaryCard title="Cash Balance" value={paperAccount.account.balance} accent="text-white" />
