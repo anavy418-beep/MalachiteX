@@ -2,6 +2,12 @@
 
 Use package scripts for a predictable monorepo deploy flow.
 
+## Node Runtime (important)
+
+- Pin Railway to Node `20` (LTS), not Node 24.
+- If needed, set Railway variable: `NIXPACKS_NODE_VERSION=20`.
+- The repo and API package both declare `engines.node: >=20 <23`.
+
 ## Build command
 
 ```bash

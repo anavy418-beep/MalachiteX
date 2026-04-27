@@ -5,6 +5,7 @@ import {
   OnModuleInit,
   ServiceUnavailableException,
 } from "@nestjs/common";
+import WebSocket from "ws";
 import { MARKET_TIMEFRAMES } from "./dto/get-market-candles.dto";
 import type { MarketsGateway } from "./markets.gateway";
 
@@ -854,22 +855,22 @@ export class MarketsService implements OnModuleInit, OnModuleDestroy {
     const socket = new WebSocket(`${BINANCE_STREAM_BASE_URL}${streamNames.join("/")}`);
     this.ws = socket;
 
-    socket.addEventListener("open", () => {
+    socket.on("open", () => {
       this.streamingAvailable = true;
       this.logger.log(`Connected market stream with ${streamNames.length} subscriptions.`);
     });
 
-    socket.addEventListener("message", (event) => {
-      this.handleStreamMessage(String(event.data));
+    socket.on("message", (data) => {
+      this.handleStreamMessage(data.toString());
     });
 
-    socket.addEventListener("error", () => {
+    socket.on("error", () => {
       if (this.ws === socket) {
         this.streamingAvailable = false;
       }
     });
 
-    socket.addEventListener("close", () => {
+    socket.on("close", () => {
       if (this.ws === socket) {
         this.ws = null;
         this.streamingAvailable = false;

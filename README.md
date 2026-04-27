@@ -2,6 +2,15 @@
 
 Turbo-style monorepo for a demo-ready, semi-production, production-style MVP of a crypto wallet + P2P platform.
 
+## Node Version
+
+- Required Node major: `20` (LTS).
+- Local version hints are pinned in root `.nvmrc` and `.node-version`.
+- Workspace `engines.node` is set to `>=20 <23` (root, API, and web package manifests).
+- Vercel and Railway should use Node 20 by honoring these engine constraints.
+- Vercel: set Project Settings -> Node.js Version to `20.x` (and keep `apps/web/package.json` engines in sync).
+- Railway: set `NIXPACKS_NODE_VERSION=20` if the platform does not auto-detect from `engines`.
+
 ## Monorepo Structure (with folder comments)
 
 ```text
