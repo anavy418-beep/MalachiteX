@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { ArrowDownToLine, CheckCircle2, Clock3, QrCode } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { tokenStore } from "@/lib/api";
@@ -46,6 +46,7 @@ function statusBadge(status: string) {
 
 export default function WalletDepositPage() {
   const { isAuthenticated, isBootstrapping } = useAuth();
+  const formRef = useRef<HTMLFormElement | null>(null);
   const [records, setRecords] = useState<DepositRecord[]>([]);
   const [wallet, setWallet] = useState<WalletSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +57,7 @@ export default function WalletDepositPage() {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
 
-  async function loadRecords() {
+  async function loadRecords(options?: { suppressError?: boolean }) {
     try {
       const token = tokenStore.accessToken ?? undefined;
 
@@ -71,7 +72,9 @@ export default function WalletDepositPage() {
     } catch (err) {
       setRecords([]);
       setWallet(null);
-      setError(friendlyErrorMessage(err, "Live deposit history is temporarily unavailable."));
+      if (!options?.suppressError) {
+        setError(friendlyErrorMessage(err, "Live deposit history is temporarily unavailable."));
+      }
     } finally {
       setLoading(false);
     }
@@ -107,8 +110,8 @@ export default function WalletDepositPage() {
     try {
       await walletService.mockDeposit(token, { amountMinor, txRef });
       setSuccess("Deposit confirmed successfully.");
-      (event.currentTarget as HTMLFormElement).reset();
-      await loadRecords();
+      if (formRef?.current) formRef.current.reset();
+      await loadRecords({ suppressError: true });
     } catch (err) {
       setError(friendlyErrorMessage(err, "Unable to submit this deposit confirmation."));
     } finally {
@@ -227,7 +230,7 @@ export default function WalletDepositPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form className="grid gap-4 md:grid-cols-[1fr_1fr_auto]" onSubmit={onSubmit}>
+          <form ref={formRef} className="grid gap-4 md:grid-cols-[1fr_1fr_auto]" onSubmit={onSubmit}>
             <div className="space-y-1.5">
               <Label htmlFor="amountMinor">Amount (minor units)</Label>
               <Input id="amountMinor" name="amountMinor" type="number" required placeholder="500000" />
