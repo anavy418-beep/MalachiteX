@@ -14,6 +14,7 @@ if (!API_BASE_URL && process.env.NODE_ENV === "production") {
 }
 
 const RESOLVED_API_BASE_URL = API_BASE_URL || "http://localhost:4000/api";
+const ACCESS_TOKEN_STORAGE_KEY = "p2p_access_token";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -29,6 +30,47 @@ interface RequestOptions extends RequestInit {
   skipAuthRefresh?: boolean;
 }
 
+function normalizeRequestPath(path: string) {
+  const trimmed = path.trim();
+  if (!trimmed) return "/";
+  return `/${trimmed.replace(/^\/+/, "")}`;
+}
+
+function stripQueryAndHash(path: string) {
+  return path.split("?")[0]?.split("#")[0] ?? path;
+}
+
+function baseUrlHasApiSegment(baseUrl: string) {
+  try {
+    const pathnameSegments = new URL(baseUrl).pathname
+      .split("/")
+      .map((segment) => segment.trim().toLowerCase())
+      .filter(Boolean);
+    return pathnameSegments.includes("api");
+  } catch {
+    return /\/api(?:\/|$)/i.test(baseUrl);
+  }
+}
+
+function normalizeRequestPathAgainstBase(path: string) {
+  const normalizedPath = normalizeRequestPath(path);
+  if (!baseUrlHasApiSegment(RESOLVED_API_BASE_URL)) {
+    return normalizedPath;
+  }
+
+  if (/^\/api(?:\/|$)/i.test(normalizedPath)) {
+    const strippedPath = normalizedPath.replace(/^\/api(?=\/|$)/i, "");
+    return strippedPath.length > 0 ? strippedPath : "/";
+  }
+
+  return normalizedPath;
+}
+
+export function resolveApiRequestUrl(path: string) {
+  const normalizedPath = normalizeRequestPathAgainstBase(path);
+  return `${RESOLVED_API_BASE_URL}${normalizedPath}`;
+}
+
 let refreshInFlight: Promise<boolean> | null = null;
 const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
   "/auth/login",
@@ -36,6 +78,11 @@ const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
   "/auth/refresh",
   "/auth/forgot-password",
   "/auth/reset-password",
+]);
+const AUTH_BEARER_EXCLUDED_PATHS = new Set([
+  "/auth/login",
+  "/auth/signup",
+  "/auth/refresh",
 ]);
 
 function isBrowser() {
@@ -76,6 +123,29 @@ function clearSessionMarkerCookies() {
   clearCookie(SESSION_COOKIE);
   clearCookie(ACCESS_TOKEN_COOKIE);
   clearCookie(REFRESH_TOKEN_COOKIE);
+}
+
+function getStoredAccessToken(): string | null {
+  if (!isBrowser()) return null;
+  try {
+    const value = window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+    return value && value.trim().length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function setStoredAccessToken(value: string | null) {
+  if (!isBrowser()) return;
+  try {
+    if (!value || value === SESSION_TOKEN_PLACEHOLDER) {
+      window.localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, value);
+  } catch {
+    // no-op; storage can be blocked in private browsing
+  }
 }
 
 function unwrapData<T>(payload: unknown): T {
@@ -125,10 +195,20 @@ async function rotateAccessToken(): Promise<boolean> {
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const normalizedPath = normalizeRequestPathAgainstBase(path);
+  const authPath = stripQueryAndHash(normalizedPath);
   const headers = new Headers(options.headers ?? {});
-  const authToken =
+  const explicitToken =
     options.token && options.token !== SESSION_TOKEN_PLACEHOLDER ? options.token : null;
-  const requestUrl = `${RESOLVED_API_BASE_URL}${path}`;
+  const storedToken =
+    !explicitToken && !AUTH_BEARER_EXCLUDED_PATHS.has(authPath)
+      ? tokenStore.accessToken
+      : null;
+  const authToken =
+    storedToken && storedToken !== SESSION_TOKEN_PLACEHOLDER
+      ? storedToken
+      : explicitToken;
+  const requestUrl = resolveApiRequestUrl(normalizedPath);
 
   if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
@@ -158,12 +238,12 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   if (
     response.status === 401 &&
     !options.skipAuthRefresh &&
-    !AUTH_REFRESH_EXCLUDED_PATHS.has(path)
+    !AUTH_REFRESH_EXCLUDED_PATHS.has(authPath)
   ) {
     const renewed = await rotateAccessToken();
 
     if (renewed) {
-      return apiRequest<T>(path, {
+      return apiRequest<T>(normalizedPath, {
         ...options,
         skipAuthRefresh: true,
       });
@@ -173,10 +253,6 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const payload = await parsePayload(response);
 
   if (!response.ok) {
-    if (response.status === 401 && path === "/auth/me") {
-      tokenStore.clear();
-    }
-
     const errorMessage =
       payload && typeof payload === "object" && "message" in payload
         ? String((payload as { message?: unknown }).message ?? "Request failed")
@@ -186,10 +262,12 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       status?: number;
       url?: string;
       rawMessage?: string;
+      responseBody?: unknown;
     };
     apiError.status = response.status;
     apiError.url = requestUrl;
     apiError.rawMessage = errorMessage;
+    apiError.responseBody = payload;
     throw apiError;
   }
 
@@ -198,14 +276,18 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
 export const tokenStore = {
   get accessToken(): string | null {
+    const storedAccessToken = getStoredAccessToken();
+    if (storedAccessToken) return storedAccessToken;
     return this.hasSessionMarker() ? SESSION_TOKEN_PLACEHOLDER : null;
   },
   set accessToken(value: string | null) {
     if (!value) {
+      setStoredAccessToken(null);
       clearSessionMarkerCookies();
       return;
     }
 
+    setStoredAccessToken(value);
     setSessionMarkerCookies();
   },
   get refreshToken(): string | null {
@@ -221,12 +303,14 @@ export const tokenStore = {
   },
   hasSessionMarker() {
     return Boolean(
+      getStoredAccessToken() ||
       getCookie(SESSION_COOKIE) ||
       getCookie(ACCESS_TOKEN_COOKIE) ||
       getCookie(REFRESH_TOKEN_COOKIE),
     );
   },
   clear() {
+    setStoredAccessToken(null);
     clearSessionMarkerCookies();
   },
 };

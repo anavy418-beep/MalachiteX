@@ -68,9 +68,11 @@ export class AuthService {
   ) {}
 
   async signup(dto: SignupDto, context?: AuthContext) {
+    const normalizedEmail = this.normalizeEmail(dto.email);
+    const normalizedUsername = dto.username.trim();
     const existing = await this.prisma.user.findFirst({
       where: {
-        OR: [{ email: dto.email.toLowerCase() }, { username: dto.username }],
+        OR: [{ email: normalizedEmail }, { username: normalizedUsername }],
       },
       select: { id: true },
     });
@@ -84,8 +86,8 @@ export class AuthService {
     const user = await this.prisma.$transaction(async (tx) => {
       const createdUser = await tx.user.create({
         data: {
-          email: dto.email.toLowerCase(),
-          username: dto.username,
+          email: normalizedEmail,
+          username: normalizedUsername,
           passwordHash,
         },
       });
@@ -137,19 +139,37 @@ export class AuthService {
   }
 
   async login(dto: LoginDto, context?: AuthContext) {
+    const normalizedEmail = this.normalizeEmail(dto.email);
+    this.logDevelopmentAuthState("login email received", {
+      email: normalizedEmail,
+    });
+
     const user = await this.prisma.user.findUnique({
-      where: { email: dto.email.toLowerCase() },
+      where: { email: normalizedEmail },
+    });
+    this.logDevelopmentAuthState("login user lookup completed", {
+      email: normalizedEmail,
+      userExists: Boolean(user),
     });
 
     if (!user) {
-      await this.recordFailedLogin(dto.email, "user_not_found", context);
+      await this.recordFailedLogin(normalizedEmail, "user_not_found", context);
       throw new UnauthorizedException("Invalid credentials");
     }
 
-    const validPassword = await bcrypt.compare(dto.password, user.passwordHash);
+    const validPassword = await this.comparePasswordAgainstStoredHash(
+      dto.password,
+      user.passwordHash,
+      user.id,
+    );
+    this.logDevelopmentAuthState("login password compare completed", {
+      email: normalizedEmail,
+      userExists: true,
+      passwordComparePassed: validPassword,
+    });
 
     if (!validPassword) {
-      await this.recordFailedLogin(dto.email, "invalid_password", context, user.id);
+      await this.recordFailedLogin(normalizedEmail, "invalid_password", context, user.id);
       throw new UnauthorizedException("Invalid credentials");
     }
 
@@ -264,7 +284,7 @@ export class AuthService {
   }
 
   async forgotPassword(email: string, context?: AuthContext) {
-    const normalizedEmail = email.toLowerCase();
+    const normalizedEmail = this.normalizeEmail(email);
     const user = await this.prisma.user.findUnique({ where: { email: normalizedEmail } });
 
     if (!user) {
@@ -493,6 +513,60 @@ export class AuthService {
         reason,
       },
     });
+  }
+
+  private async comparePasswordAgainstStoredHash(
+    inputPassword: string,
+    storedPasswordHash: string,
+    userId: string,
+  ) {
+    const normalizedStoredHash = storedPasswordHash.trim();
+    if (!normalizedStoredHash) {
+      return false;
+    }
+
+    let bcryptMatched = false;
+    try {
+      bcryptMatched = await bcrypt.compare(inputPassword, normalizedStoredHash);
+    } catch (error) {
+      this.logDevelopmentAuthState("bcrypt compare failed for stored credential", {
+        userId,
+        reason: error instanceof Error ? error.message : "unknown",
+      });
+    }
+
+    if (bcryptMatched) {
+      return true;
+    }
+
+    // Backward-compatible recovery path for legacy plaintext credentials.
+    if (normalizedStoredHash !== inputPassword) {
+      return false;
+    }
+
+    const nextPasswordHash = await bcrypt.hash(inputPassword, this.passwordHashRounds);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: nextPasswordHash },
+    });
+
+    this.logDevelopmentAuthState("migrated legacy plaintext credential to bcrypt hash", {
+      userId,
+    });
+
+    return true;
+  }
+
+  private normalizeEmail(email: string) {
+    return email.trim().toLowerCase();
+  }
+
+  private logDevelopmentAuthState(message: string, payload: Record<string, unknown>) {
+    if (process.env.NODE_ENV === "production") {
+      return;
+    }
+
+    this.logger.debug(`${message}: ${JSON.stringify(payload)}`);
   }
 
   private maskEmail(email: string) {

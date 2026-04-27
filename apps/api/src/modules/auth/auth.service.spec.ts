@@ -87,7 +87,7 @@ describe("AuthService", () => {
     });
 
     const result = await service.signup({
-      email: "new@example.com",
+      email: "  New@Example.com ",
       username: "new_user",
       password: "Password123!",
     });
@@ -95,6 +95,20 @@ describe("AuthService", () => {
     expect(result.issuedTokens.accessToken).toBe("access-token");
     expect(result.issuedTokens.refreshToken).toBe("refresh-token");
     expect(prisma.wallet.create).toHaveBeenCalled();
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: {
+        OR: [{ email: "new@example.com" }, { username: "new_user" }],
+      },
+      select: { id: true },
+    });
+    expect(prisma.user.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          email: "new@example.com",
+          username: "new_user",
+        }),
+      }),
+    );
     expect(prisma.wallet.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -139,15 +153,49 @@ describe("AuthService", () => {
     });
 
     const result = await service.login({
-      email: "user@example.com",
+      email: "  USER@Example.com  ",
       password: "Password123!",
     });
 
     expect(result.user.email).toBe("user@example.com");
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { email: "user@example.com" },
+    });
     expect(result.issuedTokens.accessToken).toBe("access-token");
     expect(auditService.log).toHaveBeenCalledWith(
       expect.objectContaining({ action: "AUTH_LOGIN" }),
     );
+  });
+
+  it("migrates legacy plaintext password to bcrypt hash during login", async () => {
+    jwtService.signAsync
+      .mockResolvedValueOnce("access-token")
+      .mockResolvedValueOnce("refresh-token");
+
+    prisma.user.findUnique.mockResolvedValue({
+      id: "user-legacy",
+      email: "legacy@example.com",
+      username: "legacy_user",
+      passwordHash: "LegacyPass123!",
+      role: Role.USER,
+      isEmailVerified: true,
+      createdAt: new Date(),
+    });
+
+    const result = await service.login({
+      email: "legacy@example.com",
+      password: "LegacyPass123!",
+    });
+
+    expect(result.user.id).toBe("user-legacy");
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "user-legacy" },
+      data: {
+        passwordHash: expect.any(String),
+      },
+    });
+    const updateArgs = prisma.user.update.mock.calls[0][0];
+    expect(updateArgs.data.passwordHash).not.toBe("LegacyPass123!");
   });
 
   it("throws unauthorized on invalid login", async () => {

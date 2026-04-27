@@ -193,10 +193,15 @@ async function seedWalletActivity(params: {
 
 async function main() {
   const defaultPasswordHash = await bcrypt.hash("Password@123", 12);
+  const demoPasswordHash = await bcrypt.hash("Demo@123456", 12);
 
   const admin = await prisma.user.upsert({
     where: { email: "admin@p2p.local" },
-    update: {},
+    update: {
+      username: "admin",
+      passwordHash: defaultPasswordHash,
+      role: Role.ADMIN,
+    },
     create: {
       email: "admin@p2p.local",
       username: "admin",
@@ -207,7 +212,11 @@ async function main() {
 
   const alice = await prisma.user.upsert({
     where: { email: "alice@p2p.local" },
-    update: {},
+    update: {
+      username: "alice",
+      passwordHash: defaultPasswordHash,
+      role: Role.USER,
+    },
     create: {
       email: "alice@p2p.local",
       username: "alice",
@@ -218,7 +227,11 @@ async function main() {
 
   const bob = await prisma.user.upsert({
     where: { email: "bob@p2p.local" },
-    update: {},
+    update: {
+      username: "bob",
+      passwordHash: defaultPasswordHash,
+      role: Role.USER,
+    },
     create: {
       email: "bob@p2p.local",
       username: "bob",
@@ -227,9 +240,25 @@ async function main() {
     },
   });
 
+  const demo = await prisma.user.upsert({
+    where: { email: "demo@xorviqa.com" },
+    update: {
+      username: "demo_trader",
+      passwordHash: demoPasswordHash,
+      role: Role.USER,
+    },
+    create: {
+      email: "demo@xorviqa.com",
+      username: "demo_trader",
+      passwordHash: demoPasswordHash,
+      role: Role.USER,
+    },
+  });
+
   const adminWallet = await ensureWalletWithSeedBalance(admin.id, BigInt(500000));
   const aliceWallet = await ensureWalletWithSeedBalance(alice.id, BigInt(1500000));
   const bobWallet = await ensureWalletWithSeedBalance(bob.id, BigInt(1200000));
+  const demoWallet = await ensureWalletWithSeedBalance(demo.id, BigInt(900000));
 
   await seedWalletActivity({
     userId: alice.id,
@@ -243,6 +272,13 @@ async function main() {
     walletId: bobWallet.id,
     depositTxRef: "MX-SEED-BOB-DEP-001",
     withdrawalId: "seed-withdrawal-bob-001",
+  });
+
+  await seedWalletActivity({
+    userId: demo.id,
+    walletId: demoWallet.id,
+    depositTxRef: "MX-SEED-DEMO-DEP-001",
+    withdrawalId: "seed-withdrawal-demo-001",
   });
 
   await prisma.offer.upsert({
@@ -372,9 +408,22 @@ async function main() {
     },
   });
 
+  await prisma.notification.upsert({
+    where: { id: "seed-notification-demo-001" },
+    update: {},
+    create: {
+      id: "seed-notification-demo-001",
+      userId: demo.id,
+      type: NotificationType.SYSTEM,
+      title: "Demo account ready",
+      message: "Use this account to validate end-to-end login and dashboard flows.",
+    },
+  });
+
   console.log("Seed complete.");
   console.log("Admin login: admin@p2p.local / Password@123");
   console.log("Trader login: alice@p2p.local / Password@123");
+  console.log("Demo login: demo@xorviqa.com / Demo@123456");
   console.log("Trade demo ID: seed-trade-alice-bob-001");
 }
 

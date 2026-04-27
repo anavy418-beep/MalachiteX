@@ -17,7 +17,8 @@
     "prisma:migrate:deploy": "echo \"[db] Checking Prisma migration status...\" && prisma migrate status && echo \"[db] Running prisma migrate deploy...\" && prisma migrate deploy || (echo \"[db] prisma migrate deploy failed. If this is P3009, run: pnpm prisma migrate resolve --rolled-back 20260420140000_p2p_payment_system && pnpm prisma migrate deploy\" && exit 1)",
     "prisma:migrate:recover:p3009": "echo \"[db] Resolving failed migration 20260420140000_p2p_payment_system as rolled back...\" && prisma migrate resolve --rolled-back \"20260420140000_p2p_payment_system\" && echo \"[db] Re-running prisma migrate deploy...\" && prisma migrate deploy",
     "prisma:migrate:reset": "prisma migrate reset --force",
-    "prisma:seed": "prisma db seed"
+    "prisma:seed": "prisma db seed",
+    "seed": "prisma db seed"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

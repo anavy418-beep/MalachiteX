@@ -5,14 +5,14 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { z } from "zod";
+import { toast } from "sonner";
 import { AuthShell, FieldError } from "@/components/auth";
-import { friendlyErrorMessage } from "@/lib/errors";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
-import { apiHealthService } from "@/services/api-health.service";
+import { resolveApiRequestUrl } from "@/lib/api";
 
 const loginSchema = z.object({
   email: z.string().trim().email("Enter a valid email"),
@@ -20,15 +20,61 @@ const loginSchema = z.object({
 });
 
 const DEMO_LOGIN = {
-  email: process.env.NEXT_PUBLIC_DEMO_EMAIL ?? "alice@p2p.local",
-  password: process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "Password@123",
+  email: process.env.NEXT_PUBLIC_DEMO_EMAIL ?? "demo@xorviqa.com",
+  password: process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "Demo@123456",
 };
 
 type LoginFormData = z.infer<typeof loginSchema>;
 
 type FormErrors = Partial<Record<keyof LoginFormData, string>>;
+type ApiClientError = Error & {
+  status?: number;
+  url?: string;
+  rawMessage?: string;
+  responseBody?: unknown;
+};
 
 export const dynamic = "force-dynamic";
+
+function resolveLoginErrorMessage(error: unknown) {
+  const rawMessage = error instanceof Error ? error.message : String(error ?? "");
+  const trimmed = rawMessage.trim();
+  const meta = error as ApiClientError;
+
+  if (meta.status === 401 || /invalid credentials|incorrect|wrong password/i.test(trimmed)) {
+    return "Invalid email or password.";
+  }
+
+  if (meta.status === 429 || /too many|rate limit/i.test(trimmed)) {
+    return "Too many sign-in attempts. Please wait a moment and try again.";
+  }
+
+  if (
+    meta.status === 0 ||
+    /failed to fetch|networkerror|load failed|timeout|cors|network request failed|fetch failed/i.test(trimmed)
+  ) {
+    return "Could not connect to the server. Please try again.";
+  }
+
+  if (!trimmed) {
+    return "We could not sign you in. Please check the details and try again.";
+  }
+
+  return trimmed.length > 180 ? "We could not sign you in. Please check the details and try again." : trimmed;
+}
+
+function logLoginSubmitError(error: unknown) {
+  const meta = error as ApiClientError;
+  const resolvedApiUrl = meta.url ?? resolveApiRequestUrl("/auth/login");
+  const fallbackMessage = error instanceof Error ? error.message : String(error ?? "");
+
+  console.error("[auth-login] Sign-in request failed", {
+    status: typeof meta.status === "number" ? meta.status : null,
+    responseMessage: meta.rawMessage ?? fallbackMessage,
+    responseBody: meta.responseBody ?? null,
+    resolvedApiUrl,
+  });
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -102,10 +148,12 @@ export default function LoginPage() {
 
     try {
       await login(formData);
+      toast.success("Signed in successfully.");
       router.replace(resolveNextPath());
       router.refresh();
     } catch (error) {
-      setFormError(friendlyErrorMessage(error, "We could not sign you in. Please check the details and try again."));
+      logLoginSubmitError(error);
+      setFormError(resolveLoginErrorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -118,22 +166,18 @@ export default function LoginPage() {
 
     try {
       await login(DEMO_LOGIN);
+      toast.success("Demo account signed in.");
       router.replace(resolveNextPath());
       router.refresh();
     } catch (error) {
+      logLoginSubmitError(error);
       setFormData(DEMO_LOGIN);
-      const reachability = await apiHealthService.checkReachability(3);
-
-      if (!reachability.reachable) {
-        setFormError("Live account features are temporarily unavailable. Public preview remains available.");
-      } else {
-        setFormError(
-          friendlyErrorMessage(
-            error,
-            "Demo login failed. Please confirm demo credentials are seeded on the API.",
-          ),
-        );
-      }
+      const resolved = resolveLoginErrorMessage(error);
+      setFormError(
+        /invalid email or password/i.test(resolved)
+          ? "Demo login failed. Please confirm demo credentials are seeded on the API."
+          : resolved,
+      );
     } finally {
       setDemoLoading(false);
     }

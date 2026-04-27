@@ -1,11 +1,126 @@
 import { ValidationPipe } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
-import { NestExpressApplication } from "@nestjs/platform-express";
+import type { NestExpressApplication } from "@nestjs/platform-express";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import cookieParser from "cookie-parser";
 import { join } from "node:path";
 import { ApiExceptionFilter } from "./common/filters/api-exception.filter";
 import { AppModule } from "./app.module";
+
+type SendMimeModule = {
+  mime?: {
+    charsets?: {
+      lookup?: (contentType: string) => string | false;
+    };
+    [key: string]: unknown;
+  };
+};
+
+type ExpressResponsePrototype = {
+  set: (field: string | Record<string, unknown>, value?: unknown) => unknown;
+  header: (field: string | Record<string, unknown>, value?: unknown) => unknown;
+};
+
+function resolveRuntimeModulePath(moduleName: string) {
+  const workspaceRoot = join(__dirname, "../../../..");
+  const searchRoots = [
+    process.cwd(),
+    workspaceRoot,
+    join(workspaceRoot, "apps/api"),
+  ];
+  const searchPaths = searchRoots.flatMap((root) => [
+    root,
+    join(root, "node_modules"),
+    join(root, "node_modules/.pnpm/node_modules"),
+  ]);
+
+  for (const searchPath of searchPaths) {
+    try {
+      return require.resolve(moduleName, { paths: [searchPath] });
+    } catch {
+      // try next search path
+    }
+  }
+
+  throw new Error(`Unable to resolve runtime module: ${moduleName}`);
+}
+
+function patchLegacyMimeCharsetLookup() {
+  try {
+    const sendModulePath = resolveRuntimeModulePath("send");
+    const sendModule = require(sendModulePath) as SendMimeModule;
+    if (sendModule.mime?.charsets?.lookup) {
+      return;
+    }
+
+    const mimeTypesPath = resolveRuntimeModulePath("mime-types");
+    const mimeTypes = require(mimeTypesPath) as {
+      charset?: (contentType: string) => string | false;
+    };
+
+    const lookup = (contentType: string) => {
+      const resolved = mimeTypes.charset?.(contentType);
+      return typeof resolved === "string" ? resolved : false;
+    };
+
+    sendModule.mime = {
+      ...(sendModule.mime ?? {}),
+      charsets: {
+        ...(sendModule.mime?.charsets ?? {}),
+        lookup,
+      },
+    };
+  } catch {
+    // Runtime compatibility patch only; ignore when dependency structure differs.
+  }
+}
+
+function patchExpressResponseCharsetHandling() {
+  try {
+    const responseModulePath = resolveRuntimeModulePath("express/lib/response");
+    const mimeTypesPath = resolveRuntimeModulePath("mime-types");
+    const responsePrototype = require(responseModulePath) as ExpressResponsePrototype;
+    const mimeTypes = require(mimeTypesPath) as {
+      charset?: (contentType: string) => string | false;
+    };
+
+    const patchedSet = function patchedSet(
+      this: { setHeader: (field: string, value: string | string[]) => void; set: ExpressResponsePrototype["set"] },
+      field: string | Record<string, unknown>,
+      val?: unknown,
+    ) {
+      if (arguments.length === 2) {
+        const fieldName = String(field);
+        let value = Array.isArray(val) ? val.map(String) : String(val);
+
+        if (fieldName.toLowerCase() === "content-type") {
+          if (Array.isArray(value)) {
+            throw new TypeError("Content-Type cannot be set to an Array");
+          }
+          if (!/;\s*charset=/i.test(value)) {
+            const charset = mimeTypes.charset?.(value.split(";")[0] ?? "");
+            if (typeof charset === "string" && charset.length > 0) {
+              value = `${value}; charset=${charset.toLowerCase()}`;
+            }
+          }
+        }
+
+        this.setHeader(fieldName, value);
+      } else {
+        for (const [key, currentValue] of Object.entries(field)) {
+          this.set(key, currentValue);
+        }
+      }
+
+      return this;
+    };
+
+    responsePrototype.set = patchedSet;
+    responsePrototype.header = patchedSet;
+  } catch {
+    // Runtime compatibility patch only; ignore when dependency structure differs.
+  }
+}
 
 function normalizeOrigin(value: string) {
   const trimmed = value.trim();
@@ -65,6 +180,9 @@ function isAllowedVercelPreviewOrigin(origin: string, slugs: Set<string>) {
 }
 
 async function bootstrap() {
+  patchLegacyMimeCharsetLookup();
+  patchExpressResponseCharsetHandling();
+
   const productionDefaultOrigins = [
     "https://malachitex-web.vercel.app",
     "https://xorviqa-web.vercel.app",

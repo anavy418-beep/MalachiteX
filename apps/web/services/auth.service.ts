@@ -28,6 +28,29 @@ export interface ResetPasswordInput {
 
 interface AuthResult {
   user: AuthUser;
+  accessToken?: string;
+  token?: string;
+  auth?: {
+    accessToken?: string;
+    token?: string;
+  };
+}
+
+const shouldDebugAuthLog =
+  process.env.NODE_ENV !== "production" ||
+  process.env.NEXT_PUBLIC_DEBUG_AUTH === "true";
+
+function normalizeAuthResult(result: AuthResult | { data?: AuthResult }): AuthResult {
+  const maybeNested = (result as { data?: AuthResult })?.data;
+  if (maybeNested && typeof maybeNested === "object") {
+    return maybeNested;
+  }
+
+  return result as AuthResult;
+}
+
+function extractAccessToken(result: AuthResult) {
+  return result.accessToken ?? result.token ?? result.auth?.accessToken ?? result.auth?.token ?? null;
 }
 
 function toUsername(fullName: string): string {
@@ -43,32 +66,63 @@ function toUsername(fullName: string): string {
   return `${fallback}_${suffix}`.slice(0, 30);
 }
 
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
 export const authService = {
   async login(input: LoginInput): Promise<AuthResult> {
-    const result = await apiRequest<AuthResult>("/auth/login", {
+    const normalizedEmail = normalizeEmail(input.email);
+    const rawResult = await apiRequest<AuthResult | { data?: AuthResult }>("/auth/login", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        ...input,
+        email: normalizedEmail,
+      }),
     });
+    const result = normalizeAuthResult(rawResult);
+
+    const accessToken = extractAccessToken(result);
+
+    if (shouldDebugAuthLog) {
+      console.info("[auth-service] login response", {
+        hasUser: Boolean(result.user),
+        hasAccessToken: Boolean(accessToken),
+        keys: Object.keys(result ?? {}),
+      });
+    }
 
     // Keep frontend auth markers in sync so protected routes resolve correctly after auth.
-    tokenStore.accessToken = SESSION_TOKEN_PLACEHOLDER;
+    tokenStore.accessToken = accessToken ?? SESSION_TOKEN_PLACEHOLDER;
     tokenStore.refreshToken = SESSION_TOKEN_PLACEHOLDER;
 
     return result;
   },
 
   async signup(input: SignupInput): Promise<AuthResult> {
-    const result = await apiRequest<AuthResult>("/auth/signup", {
+    const normalizedEmail = normalizeEmail(input.email);
+    const rawResult = await apiRequest<AuthResult | { data?: AuthResult }>("/auth/signup", {
       method: "POST",
       body: JSON.stringify({
-        email: input.email,
+        email: normalizedEmail,
         username: toUsername(input.fullName),
         password: input.password,
       }),
     });
+    const result = normalizeAuthResult(rawResult);
+
+    const accessToken = extractAccessToken(result);
+
+    if (shouldDebugAuthLog) {
+      console.info("[auth-service] signup response", {
+        hasUser: Boolean(result.user),
+        hasAccessToken: Boolean(accessToken),
+        keys: Object.keys(result ?? {}),
+      });
+    }
 
     // Keep frontend auth markers in sync so protected routes resolve correctly after auth.
-    tokenStore.accessToken = SESSION_TOKEN_PLACEHOLDER;
+    tokenStore.accessToken = accessToken ?? SESSION_TOKEN_PLACEHOLDER;
     tokenStore.refreshToken = SESSION_TOKEN_PLACEHOLDER;
 
     return result;
@@ -89,7 +143,10 @@ export const authService = {
   },
 
   async getCurrentUser(): Promise<AuthUser> {
-    return apiRequest<AuthUser>("/auth/me");
+    const token = tokenStore.accessToken;
+    return apiRequest<AuthUser>("/auth/me", {
+      token: token && token !== SESSION_TOKEN_PLACEHOLDER ? token : undefined,
+    });
   },
 
   async forgotPassword(email: string): Promise<{ requestAccepted: boolean; resetToken?: string }> {

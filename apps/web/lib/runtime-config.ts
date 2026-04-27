@@ -10,6 +10,34 @@ function isAbsoluteHttpUrl(value: string) {
   return value.startsWith("http://") || value.startsWith("https://");
 }
 
+function normalizeApiPathname(rawPathname: string) {
+  const segments = rawPathname
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  const normalizedSegments: string[] = [];
+  for (const segment of segments) {
+    const canonicalSegment = segment.toLowerCase() === "api" ? "api" : segment;
+    const previousSegment = normalizedSegments[normalizedSegments.length - 1];
+    if (canonicalSegment === "api" && previousSegment?.toLowerCase() === "api") {
+      continue;
+    }
+    normalizedSegments.push(canonicalSegment);
+  }
+
+  const hasApiSegment = normalizedSegments.some((segment) => segment.toLowerCase() === "api");
+  if (!hasApiSegment) {
+    normalizedSegments.push("api");
+  }
+
+  if (normalizedSegments.length === 0) {
+    return "/api";
+  }
+
+  return `/${normalizedSegments.join("/")}`;
+}
+
 function pointsToLocalhost(value: string) {
   if (!isAbsoluteHttpUrl(value)) return false;
 
@@ -24,18 +52,16 @@ function normalizeApiBaseUrl(rawValue: string) {
   const value = trimTrailingSlash(rawValue.trim());
   if (!value) return "";
 
-  if (!value.startsWith("http://") && !value.startsWith("https://")) {
+  if (!isAbsoluteHttpUrl(value)) {
+    if (value.startsWith("/")) {
+      return trimTrailingSlash(normalizeApiPathname(value));
+    }
     return value;
   }
 
   try {
     const parsed = new URL(value);
-    const normalizedPath = parsed.pathname.replace(/\/+$/, "");
-    if (!normalizedPath || normalizedPath === "/") {
-      parsed.pathname = "/api";
-    } else if (/^\/api(\/api)+$/i.test(normalizedPath)) {
-      parsed.pathname = "/api";
-    }
+    parsed.pathname = normalizeApiPathname(parsed.pathname);
 
     return trimTrailingSlash(parsed.toString());
   } catch {
