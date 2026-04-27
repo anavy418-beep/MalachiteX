@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 const navLinks = [
   { href: "/", label: "Home" },
   { href: "/markets", label: "Live Market" },
-  { href: "/trades", label: "Trade" },
+  { href: "/demo-trading", label: "Trade" },
   { href: "/wallet", label: "Wallet" },
   { href: "/p2p", label: "P2P" },
 ];

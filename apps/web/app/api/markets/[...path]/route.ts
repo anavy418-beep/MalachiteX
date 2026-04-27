@@ -3,7 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const DEFAULT_MARKETS_UPSTREAM_API_BASE_URL = "http://localhost:4000/api";
+const DEFAULT_LOCAL_MARKETS_UPSTREAM_API_BASE_URL = "http://localhost:4000/api";
+const DEFAULT_PRODUCTION_MARKETS_UPSTREAM_API_BASE_URL = "https://api-production-60fa.up.railway.app/api";
 const SUPPORTED_MARKETS_ENDPOINTS = new Set([
   "overview",
   "pairs",
@@ -16,16 +17,39 @@ function trimTrailingSlash(value: string) {
   return value.replace(/\/+$/, "");
 }
 
+function normalizeApiPathname(rawPathname: string) {
+  const segments = rawPathname
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const normalizedSegments: string[] = [];
+
+  for (const segment of segments) {
+    const canonicalSegment = segment.toLowerCase() === "api" ? "api" : segment;
+    const previousSegment = normalizedSegments[normalizedSegments.length - 1];
+    if (canonicalSegment === "api" && previousSegment?.toLowerCase() === "api") {
+      continue;
+    }
+    normalizedSegments.push(canonicalSegment);
+  }
+
+  if (!normalizedSegments.some((segment) => segment.toLowerCase() === "api")) {
+    normalizedSegments.push("api");
+  }
+
+  return `/${normalizedSegments.join("/")}`;
+}
+
 function normalizeApiBase(value: string) {
   const trimmed = trimTrailingSlash(value.trim());
   if (!trimmed) return "";
-  if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return trimmed;
+  if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+    return trimmed.startsWith("/") ? trimTrailingSlash(normalizeApiPathname(trimmed)) : trimmed;
+  }
 
   try {
     const parsed = new URL(trimmed);
-    if (!parsed.pathname || parsed.pathname === "/") {
-      parsed.pathname = "/api";
-    }
+    parsed.pathname = normalizeApiPathname(parsed.pathname);
     return trimTrailingSlash(parsed.toString());
   } catch {
     return trimmed;
@@ -51,7 +75,9 @@ function resolveMarketsUpstreamApiBaseUrl() {
     return normalizeApiBase(publicApiBase);
   }
 
-  return DEFAULT_MARKETS_UPSTREAM_API_BASE_URL;
+  return process.env.NODE_ENV === "production"
+    ? DEFAULT_PRODUCTION_MARKETS_UPSTREAM_API_BASE_URL
+    : DEFAULT_LOCAL_MARKETS_UPSTREAM_API_BASE_URL;
 }
 
 function buildUpstreamUrl(request: NextRequest, path: string[]) {

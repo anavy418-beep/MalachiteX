@@ -629,6 +629,8 @@ function DemoTradingPageContent() {
   );
   const isSelectionSynced =
     querySelection.symbol === selectedSymbol && querySelection.interval === selectedInterval;
+  const isPublicMarketOnly = !isAuthenticated && !isBootstrapping;
+  const authRequiredMessage = "Sign in to place demo orders and manage positions.";
 
   useEffect(() => {
     setError(null);
@@ -1097,6 +1099,12 @@ function DemoTradingPageContent() {
   }, [accountMode, isAuthenticated, isBootstrapping]);
 
   useEffect(() => {
+    if (isPublicMarketOnly && accountMode === "REAL") {
+      setAccountMode("DEMO");
+    }
+  }, [accountMode, isPublicMarketOnly]);
+
+  useEffect(() => {
     if (accountMode !== "DEMO" || !isAuthenticated || accountMissing || !paperAccount) return;
 
     const timer = setInterval(() => {
@@ -1155,7 +1163,10 @@ function DemoTradingPageContent() {
       return;
     }
     const token = tokenStore.accessToken;
-    if (!token) return;
+    if (!token) {
+      setError(authRequiredMessage);
+      return;
+    }
 
     setIsCreatingAccount(true);
     setError(null);
@@ -1173,6 +1184,10 @@ function DemoTradingPageContent() {
 
   async function handleSubmitOrder() {
     if (accountMode === "REAL") {
+      if (isPublicMarketOnly) {
+        setError(authRequiredMessage);
+        return;
+      }
       if (!realHasFunds) {
         setError("No real funds available. Deposit funds to trade.");
         return;
@@ -1182,7 +1197,10 @@ function DemoTradingPageContent() {
     }
 
     const token = tokenStore.accessToken;
-    if (!token) return;
+    if (!token) {
+      setError(authRequiredMessage);
+      return;
+    }
 
     setIsSubmitting(true);
     setError(null);
@@ -1215,7 +1233,10 @@ function DemoTradingPageContent() {
       return;
     }
     const token = tokenStore.accessToken;
-    if (!token) return;
+    if (!token) {
+      setError(authRequiredMessage);
+      return;
+    }
 
     setIsSubmitting(true);
     setError(null);
@@ -1235,7 +1256,10 @@ function DemoTradingPageContent() {
       return;
     }
     const token = tokenStore.accessToken;
-    if (!token) return;
+    if (!token) {
+      setError(authRequiredMessage);
+      return;
+    }
 
     setIsSubmitting(true);
     setError(null);
@@ -1255,7 +1279,10 @@ function DemoTradingPageContent() {
       return;
     }
     const token = tokenStore.accessToken;
-    if (!token) return;
+    if (!token) {
+      setError(authRequiredMessage);
+      return;
+    }
 
     const draft = riskDraft[positionId];
     const stopLoss = draft?.stopLossPrice?.trim() ?? "";
@@ -1347,18 +1374,6 @@ function DemoTradingPageContent() {
     return <LoadingState label="Preparing demo trading workspace" />;
   }
 
-  if (!isAuthenticated && !isBootstrapping) {
-    return (
-      <section className="space-y-4">
-        <h1 className="text-3xl font-semibold text-white">Demo Trading</h1>
-        <p className="text-sm text-slate-400">Log in to create and use your paper trading account.</p>
-        <Link href="/login">
-          <Button>Go to login</Button>
-        </Link>
-      </section>
-    );
-  }
-
   return (
     <section className="space-y-6">
       <header className="space-y-2">
@@ -1391,9 +1406,10 @@ function DemoTradingPageContent() {
           </button>
           <button
             onClick={() => setAccountMode("REAL")}
+            disabled={isPublicMarketOnly}
             className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
               accountMode === "REAL" ? "bg-emerald-600 text-white" : "text-slate-300"
-            }`}
+            } ${isPublicMarketOnly ? "cursor-not-allowed opacity-60" : ""}`}
           >
             Real Account
           </button>
@@ -1422,6 +1438,19 @@ function DemoTradingPageContent() {
         </div>
       </header>
 
+      {isPublicMarketOnly ? (
+        <Card className="border-emerald-700/30 bg-emerald-950/20">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-6">
+            <p className="text-sm text-emerald-100">
+              Live market data is public. Sign in to place demo orders and manage positions.
+            </p>
+            <Link href={`/login?next=${encodeURIComponent(targetSelectionPath)}`}>
+              <Button size="sm">Sign in to trade</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {error ? (
         <Card className="border-red-700/30 bg-red-950/20">
           <CardContent className="pt-6">
@@ -1444,7 +1473,11 @@ function DemoTradingPageContent() {
                 </p>
               </div>
             </div>
-            <Button onClick={() => void handleCreateAccount()} disabled={isCreatingAccount} className="gap-2">
+            <Button
+              onClick={() => void handleCreateAccount()}
+              disabled={isCreatingAccount || isPublicMarketOnly}
+              className="gap-2"
+            >
               <WalletCards className="h-4 w-4" />
               {isCreatingAccount ? "Creating..." : "Create Demo Account"}
             </Button>
@@ -1780,7 +1813,11 @@ function DemoTradingPageContent() {
                   </div>
                 </div>
 
-                <Button className="w-full gap-2" disabled={isSubmitting} onClick={() => void handleSubmitOrder()}>
+                <Button
+                  className="w-full gap-2"
+                  disabled={isSubmitting || (accountMode === "DEMO" && isPublicMarketOnly)}
+                  onClick={() => void handleSubmitOrder()}
+                >
                   <RefreshCw className="h-4 w-4" />
                   {isSubmitting ? "Submitting..." : `Place ${side} ${orderType} Order`}
                 </Button>
@@ -1830,7 +1867,12 @@ function DemoTradingPageContent() {
                                 {position.leverage}x
                               </span>
                             </div>
-                            <Button variant="outline" size="sm" disabled={isSubmitting} onClick={() => void handleClosePosition(position.symbol)}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={isSubmitting || isPublicMarketOnly}
+                              onClick={() => void handleClosePosition(position.symbol)}
+                            >
                               Close
                             </Button>
                           </div>
@@ -1866,7 +1908,12 @@ function DemoTradingPageContent() {
                               placeholder="Take profit"
                               className="h-9 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-slate-100 outline-none focus:ring-2 focus:ring-emerald-500"
                             />
-                            <Button size="sm" variant="outline" disabled={isSubmitting} onClick={() => void handleUpdateRisk(position.symbol, position.id)}>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={isSubmitting || isPublicMarketOnly}
+                              onClick={() => void handleUpdateRisk(position.symbol, position.id)}
+                            >
                               Update SL/TP
                             </Button>
                           </div>
@@ -1893,7 +1940,13 @@ function DemoTradingPageContent() {
                             <p className="text-sm font-medium text-slate-100">{order.symbol.replace("USDT", "/USDT")}</p>
                             <span className="rounded-full bg-zinc-900 px-2 py-0.5 text-[11px] text-slate-300">{order.leverage}x</span>
                           </div>
-                          <Button variant="outline" size="sm" disabled={isSubmitting} onClick={() => void handleCancelOrder(order.id)} className="gap-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={isSubmitting || isPublicMarketOnly}
+                            onClick={() => void handleCancelOrder(order.id)}
+                            className="gap-1"
+                          >
                             <XCircle className="h-3.5 w-3.5" />
                             Cancel
                           </Button>
