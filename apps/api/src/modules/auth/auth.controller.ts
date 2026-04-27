@@ -48,7 +48,11 @@ export class AuthController {
   ) {
     const data = await this.authService.signup(dto, this.getAuditContext(req));
     this.writeSessionCookies(res as { cookie: (...args: unknown[]) => void }, data.issuedTokens);
-    return okResponse("Signup successful", { user: data.user });
+    return okResponse("Signup successful", {
+      user: data.user,
+      accessToken: data.issuedTokens.accessToken,
+      token: data.issuedTokens.accessToken,
+    });
   }
 
   @Public()
@@ -61,7 +65,11 @@ export class AuthController {
   async login(@Body() dto: LoginDto, @Req() req: unknown, @Res({ passthrough: true }) res: unknown) {
     const data = await this.authService.login(dto, this.getAuditContext(req));
     this.writeSessionCookies(res as { cookie: (...args: unknown[]) => void }, data.issuedTokens);
-    return okResponse("Login successful", { user: data.user });
+    return okResponse("Login successful", {
+      user: data.user,
+      accessToken: data.issuedTokens.accessToken,
+      token: data.issuedTokens.accessToken,
+    });
   }
 
   @ApiBearerAuth()
@@ -101,7 +109,12 @@ export class AuthController {
   ) {
     const data = await this.authService.refresh(this.extractRefreshToken(req, dto), this.getAuditContext(req));
     this.writeSessionCookies(res as { cookie: (...args: unknown[]) => void }, data.issuedTokens);
-    return okResponse("Token refresh successful", { refreshed: true, user: data.user });
+    return okResponse("Token refresh successful", {
+      refreshed: true,
+      user: data.user,
+      accessToken: data.issuedTokens.accessToken,
+      token: data.issuedTokens.accessToken,
+    });
   }
 
   @Public()

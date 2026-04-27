@@ -86,15 +86,15 @@ export interface TradeRecord {
 }
 
 export const tradesService = {
-  listMine(token: string) {
+  listMine(token: string | undefined) {
     return apiRequest<TradeRecord[]>("/trades", { token });
   },
 
-  getById(token: string, tradeId: string) {
+  getById(token: string | undefined, tradeId: string) {
     return apiRequest<TradeRecord>(`/trades/${tradeId}`, { token });
   },
 
-  create(token: string, input: { offerId: string; amountMinor: string }) {
+  create(token: string | undefined, input: { offerId: string; amountMinor: string }) {
     return apiRequest<TradeRecord>("/trades", {
       method: "POST",
       token,
@@ -103,7 +103,7 @@ export const tradesService = {
   },
 
   markPaid(
-    token: string,
+    token: string | undefined,
     tradeId: string,
     input: {
       paymentReference?: string;
@@ -119,14 +119,14 @@ export const tradesService = {
     });
   },
 
-  release(token: string, tradeId: string) {
+  release(token: string | undefined, tradeId: string) {
     return apiRequest<TradeRecord>(`/trades/${tradeId}/release`, {
       method: "POST",
       token,
     });
   },
 
-  cancel(token: string, tradeId: string) {
+  cancel(token: string | undefined, tradeId: string) {
     return apiRequest<TradeRecord>(`/trades/${tradeId}/cancel`, {
       method: "POST",
       token,
@@ -134,7 +134,7 @@ export const tradesService = {
   },
 
   openDispute(
-    token: string,
+    token: string | undefined,
     tradeId: string,
     reason: string,
     input?: { paymentReference?: string; proofFileName?: string; proofUrl?: string; evidenceKeys?: string[] },
@@ -152,11 +152,11 @@ export const tradesService = {
     );
   },
 
-  listMessages(token: string, tradeId: string) {
+  listMessages(token: string | undefined, tradeId: string) {
     return apiRequest<TradeMessage[]>(`/chat/trades/${tradeId}/messages`, { token });
   },
 
-  sendMessage(token: string, tradeId: string, body: string) {
+  sendMessage(token: string | undefined, tradeId: string, body: string) {
     return apiRequest<{ message: TradeMessage; botMessage?: TradeMessage | null }>(
       `/chat/trades/${tradeId}/messages`,
       {

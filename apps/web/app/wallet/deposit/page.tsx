@@ -58,13 +58,7 @@ export default function WalletDepositPage() {
 
   async function loadRecords() {
     try {
-      const token = tokenStore.accessToken;
-      if (!token) {
-        setWallet(EMPTY_WALLET_SUMMARY);
-        setRecords([]);
-        setError("Wallet session unavailable. Showing safe zero-balance wallet state.");
-        return;
-      }
+      const token = tokenStore.accessToken ?? undefined;
 
       const [payload, walletPayload] = await Promise.all([
         walletService.listDeposits(token),
@@ -107,12 +101,7 @@ export default function WalletDepositPage() {
     const formData = new FormData(event.currentTarget);
     const amountMinor = String(formData.get("amountMinor") ?? "");
     const txRef = String(formData.get("txRef") ?? "");
-    const token = tokenStore.accessToken;
-
-    if (!token) {
-      setError("Wallet session unavailable. Please sign in again.");
-      return;
-    }
+    const token = tokenStore.accessToken ?? undefined;
 
     setSubmitting(true);
     try {

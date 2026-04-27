@@ -1117,14 +1117,7 @@ function DemoTradingPageContent() {
       setRealWalletLoading(true);
       try {
         const token = tokenStore.accessToken;
-        if (!token) {
-          if (!active) return;
-          setRealWallet(EMPTY_REAL_WALLET);
-          setRealWalletError("Real wallet session is unavailable. Showing safe zero-balance wallet state.");
-          return;
-        }
-
-        const payload = await walletService.getWallet(token);
+        const payload = await walletService.getWallet(token ?? undefined);
         if (!active) return;
         setRealWallet({
           currency: payload?.currency || "USDT",
@@ -1184,7 +1177,7 @@ function DemoTradingPageContent() {
         setError("No real funds available. Deposit funds to trade.");
         return;
       }
-      router.push("/trade");
+      router.push("/trades");
       return;
     }
 
@@ -1512,7 +1505,7 @@ function DemoTradingPageContent() {
                 <Link href="/wallet/deposit">
                   <Button>Deposit Funds</Button>
                 </Link>
-                <Button onClick={() => router.push("/trade")} variant="outline" disabled={!realHasFunds}>
+                <Button onClick={() => router.push("/trades")} variant="outline" disabled={!realHasFunds}>
                   Open Real Trade Desk
                 </Button>
               </div>

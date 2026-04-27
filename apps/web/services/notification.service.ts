@@ -187,7 +187,7 @@ function buildDerivedNotifications(input: {
 
 export const notificationService = {
   async list(input: {
-    token: string;
+    token?: string;
     userId: string;
     wallet: WalletSummary;
     trades: TradeRecord[];

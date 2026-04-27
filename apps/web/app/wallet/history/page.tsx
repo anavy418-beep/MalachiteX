@@ -103,13 +103,7 @@ export default function WalletHistoryPage() {
 
     (async () => {
       try {
-        const token = tokenStore.accessToken;
-        if (!token) {
-          setCurrency("INR");
-          setHistory([]);
-          setError("Wallet session unavailable. Showing safe history state.");
-          return;
-        }
+        const token = tokenStore.accessToken ?? undefined;
 
         const [wallet, deposits, withdrawals] = await Promise.all([
           walletService.getWallet(token),

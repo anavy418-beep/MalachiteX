@@ -7,10 +7,10 @@ export function friendlyErrorMessage(error: unknown, fallback = "Something went 
     return "Live service is temporarily unavailable. Please try again shortly.";
   }
   if (/failed to fetch|networkerror|load failed|cors origin blocked|health check timeout/i.test(message)) {
-    return "Live account features are temporarily unavailable. Public preview remains available.";
+    return "Could not connect to live services right now. Please try again.";
   }
   if (/unauthorized|401|session|token/i.test(message)) {
-    return "Your session could not be verified. Please sign in again or use Try Demo.";
+    return "Your session has expired. Please sign in again.";
   }
   if (/forbidden|403/i.test(message)) {
     return "This action is limited to the correct trade participant or admin role.";

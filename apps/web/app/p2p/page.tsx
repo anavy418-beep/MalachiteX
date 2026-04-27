@@ -173,15 +173,12 @@ export default function P2PPage() {
   }
 
   useEffect(() => {
-    if (isBootstrapping || !isAuthenticated) {
-      setLoading(false);
-      setOffers([]);
-      setError(null);
+    if (isBootstrapping) {
       return;
     }
 
     void loadOffers();
-  }, [isAuthenticated, isBootstrapping]);
+  }, [isBootstrapping]);
 
   const activeFilterCount = [
     paymentMethod !== "ALL",
@@ -235,14 +232,8 @@ export default function P2PPage() {
       router.push(`/login?next=${encodeURIComponent("/p2p")}`);
       return;
     }
-
-    const token = tokenStore.accessToken;
     if (offer.ownerUserId && offer.ownerUserId === user?.id) {
       setError("This is your own offer. Manage it from My Offers.");
-      return;
-    }
-    if (!token) {
-      setError("Session is syncing. Please try again in a moment.");
       return;
     }
 
@@ -292,16 +283,11 @@ export default function P2PPage() {
       return;
     }
 
-    const token = tokenStore.accessToken;
     if (!isAuthenticated) {
       router.push(`/login?next=${encodeURIComponent("/p2p")}`);
       return;
     }
-
-    if (!token) {
-      setTradeError("Session is syncing. Please try again in a moment.");
-      return;
-    }
+    const token = tokenStore.accessToken ?? undefined;
 
     setSubmittingOfferId(selectedOffer.id);
     setError(null);
@@ -326,18 +312,6 @@ export default function P2PPage() {
     return <LoadingState label="Loading P2P workspace" />;
   }
 
-  if (!isAuthenticated) {
-    return (
-      <section className="space-y-3">
-        <h1 className="text-2xl font-semibold text-white">P2P Market</h1>
-        <p className="text-sm text-slate-400">Your session is not active. Please log in to access the P2P desk.</p>
-        <Link href="/login">
-          <Button>Go to login</Button>
-        </Link>
-      </section>
-    );
-  }
-
   return (
     <section className="space-y-6">
       <header className="space-y-2">
@@ -354,7 +328,7 @@ export default function P2PPage() {
               Escrow-backed demo marketplace flow for secure staged transactions.
             </div>
             <div className="flex flex-wrap gap-2">
-              <Link href="/offers/create">
+              <Link href={isAuthenticated ? "/offers/create" : "/login?next=/offers/create"}>
                 <Button className="gap-2">
                   <Plus className="h-4 w-4" />
                   Create Offer
@@ -364,9 +338,9 @@ export default function P2PPage() {
                 <Filter className="h-4 w-4" />
                 Filters {activeFilterCount > 0 ? `(${activeFilterCount})` : ""}
               </Button>
-              <Button variant="outline" className="gap-2" onClick={() => void loadOffers()}>
+              <Button variant="outline" className="gap-2" onClick={() => void loadOffers()} disabled={loading}>
                 <RefreshCw className="h-4 w-4" />
-                Refresh
+                {loading ? "Refreshing..." : "Refresh"}
               </Button>
             </div>
           </div>
@@ -536,6 +510,19 @@ export default function P2PPage() {
         </Card>
       ) : null}
 
+      {!isAuthenticated ? (
+        <Card className="border-emerald-700/30 bg-emerald-950/15">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-6">
+            <p className="text-sm text-emerald-100">
+              Browse live offers as a guest. Sign in to create offers and start trades.
+            </p>
+            <Link href="/login?next=/p2p">
+              <Button size="sm">Sign in to trade</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Available Offers</CardTitle>
@@ -654,7 +641,9 @@ export default function P2PPage() {
           {!loading && visibleOffers.length === 0 ? (
             <div className="rounded-xl border border-dashed border-zinc-700 px-4 py-6 text-center">
               <p className="text-sm text-slate-400">No offers match your current filters.</p>
-              <p className="mt-1 text-xs text-slate-500">Try changing asset, payment method, amount, or trusted/online filters.</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Try changing asset, payment method, amount, or trusted/online filters.
+              </p>
               <div className="mt-3">
                 <Button variant="outline" className="gap-2" onClick={resetFilters}>
                   <RotateCcw className="h-4 w-4" />

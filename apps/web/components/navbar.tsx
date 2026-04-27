@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LogOut, Sparkles, UserCircle2 } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -27,8 +28,10 @@ export function Navbar() {
 
     try {
       await logout();
+      toast.success("Logged out successfully.");
     } catch (error) {
       console.error("Logout failed", error);
+      toast.error("Logout failed. Please try again.");
     } finally {
       router.replace("/");
       router.refresh();

@@ -125,8 +125,12 @@ export const offersService = {
         return apiOffers.map(normalizeOffer);
       }
       return mergeUniqueOffers(apiOffers.map(normalizeOffer), demoOffers);
-    } catch {
-      return includeLocalDemoFallback ? demoOffers : [];
+    } catch (error) {
+      if (!includeLocalDemoFallback) {
+        throw error;
+      }
+
+      return demoOffers;
     }
   },
 

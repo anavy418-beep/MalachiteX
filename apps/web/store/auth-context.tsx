@@ -27,6 +27,40 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+const SESSION_VERIFY_MAX_ATTEMPTS = 2;
+const SESSION_VERIFY_RETRY_DELAY_MS = 450;
+const shouldDebugAuthLog =
+  process.env.NODE_ENV !== "production" ||
+  process.env.NEXT_PUBLIC_DEBUG_AUTH === "true";
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function extractErrorMeta(error: unknown) {
+  const errorMeta = error as Error & { status?: number; url?: string };
+  return {
+    status: typeof errorMeta.status === "number" ? errorMeta.status : undefined,
+    url: errorMeta.url ?? undefined,
+    message: error instanceof Error ? error.message : String(error ?? ""),
+  };
+}
+
+function isConfirmedAuthFailure(error: unknown) {
+  const { status, message } = extractErrorMeta(error);
+  if (status === 401 || status === 403) return true;
+
+  return /(401|403|unauthorized|forbidden|invalid token|session expired|jwt)/i.test(message);
+}
+
+function debugAuthLog(message: string, payload?: Record<string, unknown>) {
+  if (!shouldDebugAuthLog) return;
+  if (payload) {
+    console.info(`[auth] ${message}`, payload);
+    return;
+  }
+  console.info(`[auth] ${message}`);
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -55,38 +89,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(currentUser);
       return currentUser;
     } catch (error) {
-      const errorMeta = error as Error & { status?: number; url?: string };
-      const status = typeof errorMeta.status === "number" ? errorMeta.status : undefined;
+      const { status, url, message } = extractErrorMeta(error);
       const reachability = await apiHealthService.checkReachability();
-      const authFailureLikely =
-        status === 401 ||
-        status === 403 ||
-        (
-          error instanceof Error &&
-          /(401|403|unauthorized|forbidden|invalid|session|token|jwt)/i.test(error.message)
-        );
+      const authFailureLikely = isConfirmedAuthFailure(error);
 
       if (authFailureLikely) {
-        if (process.env.NODE_ENV !== "production") {
-          console.warn("[auth] clearing session markers after confirmed auth failure", {
-            status,
-            url: errorMeta.url ?? null,
-            reason: error instanceof Error ? error.message : String(error ?? ""),
-          });
-        }
+        debugAuthLog("clearing session markers after confirmed auth failure", {
+          status,
+          url: url ?? null,
+          reason: message,
+        });
         tokenStore.clear();
         setUser(null);
         return null;
       }
 
-      if (process.env.NODE_ENV !== "production") {
-        console.warn("[auth] preserving session markers after non-auth refresh failure", {
-          status,
-          reachable: reachability.reachable,
-          url: errorMeta.url ?? null,
-          reason: error instanceof Error ? error.message : String(error ?? ""),
-        });
-      }
+      debugAuthLog("preserving session markers after non-auth refresh failure", {
+        status,
+        reachable: reachability.reachable,
+        url: url ?? null,
+        reason: message,
+      });
 
       return userRef.current;
     }
@@ -99,43 +122,93 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, [refreshUser]);
 
+  const verifySessionAfterAuth = useCallback(async (source: "login" | "signup", fallbackUser: AuthUser | null) => {
+    let lastError: unknown = null;
+
+    for (let attempt = 1; attempt <= SESSION_VERIFY_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const verifiedUser = await authService.getCurrentUser();
+        debugAuthLog("session verification succeeded", {
+          source,
+          attempt,
+          userId: verifiedUser.id,
+        });
+        setUser(verifiedUser);
+        return verifiedUser;
+      } catch (error) {
+        lastError = error;
+        const { status, url, message } = extractErrorMeta(error);
+        const authFailure = isConfirmedAuthFailure(error);
+
+        debugAuthLog("session verification failed", {
+          source,
+          attempt,
+          status: status ?? null,
+          authFailure,
+          url: url ?? null,
+          reason: message,
+        });
+
+        if (attempt < SESSION_VERIFY_MAX_ATTEMPTS) {
+          await sleep(SESSION_VERIFY_RETRY_DELAY_MS * attempt);
+          continue;
+        }
+
+        if (authFailure) {
+          debugAuthLog("session verification returned auth failure after successful auth payload; using fallback user", {
+            source,
+            attempt,
+            status: status ?? null,
+            url: url ?? null,
+            reason: message,
+            fallbackUserId: fallbackUser?.id ?? null,
+          });
+          break;
+        }
+      }
+    }
+
+    const { status, url, message } = extractErrorMeta(lastError);
+    debugAuthLog("using login payload user after non-auth verification failure", {
+      source,
+      status: status ?? null,
+      url: url ?? null,
+      reason: message,
+      fallbackUserId: fallbackUser?.id ?? null,
+    });
+    if (!fallbackUser) {
+      tokenStore.clear();
+      setUser(null);
+      throw new Error("Signed in successfully, but we could not load your profile yet. Please try again.");
+    }
+
+    setUser(fallbackUser);
+    return fallbackUser;
+  }, []);
+
   const login = useCallback(async (input: LoginInput) => {
     const result = await authService.login(input);
-    try {
-      const verifiedUser = await authService.getCurrentUser();
-      setUser(verifiedUser);
-      return verifiedUser;
-    } catch (error) {
-      const status = (error as Error & { status?: number }).status;
-      if (status === 401 || status === 403) {
-        tokenStore.clear();
-        setUser(null);
-        throw new Error("Session could not be established. Please sign in again.");
-      }
 
-      setUser(result.user);
-      return result.user;
-    }
-  }, []);
+    debugAuthLog("login payload received", {
+      hasUser: Boolean(result.user),
+      userId: result.user?.id ?? null,
+      email: result.user?.email ?? null,
+    });
+
+    return verifySessionAfterAuth("login", result.user);
+  }, [verifySessionAfterAuth]);
 
   const signup = useCallback(async (input: SignupInput) => {
     const result = await authService.signup(input);
-    try {
-      const verifiedUser = await authService.getCurrentUser();
-      setUser(verifiedUser);
-      return verifiedUser;
-    } catch (error) {
-      const status = (error as Error & { status?: number }).status;
-      if (status === 401 || status === 403) {
-        tokenStore.clear();
-        setUser(null);
-        throw new Error("Session could not be established. Please sign in again.");
-      }
 
-      setUser(result.user);
-      return result.user;
-    }
-  }, []);
+    debugAuthLog("signup payload received", {
+      hasUser: Boolean(result.user),
+      userId: result.user?.id ?? null,
+      email: result.user?.email ?? null,
+    });
+
+    return verifySessionAfterAuth("signup", result.user);
+  }, [verifySessionAfterAuth]);
 
   const logout = useCallback(async () => {
     try {

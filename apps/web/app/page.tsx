@@ -27,6 +27,7 @@ import {
   WalletCards,
   Zap,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -125,11 +126,51 @@ const partnerPrograms = [
 ];
 
 const footerColumns = [
-  { heading: "Products", links: ["P2P", "Wallet", "Swap", "Fees"] },
-  { heading: "Company", links: ["About", "Careers", "Partner Program", "Status"] },
-  { heading: "Support", links: ["Help Center", "Academy", "Contact", "FAQ"] },
-  { heading: "Developers", links: ["API Docs", "WebSocket", "Sandbox", "System Status"] },
-  { heading: "Legal", links: ["Privacy", "Terms", "Risk Disclosure", "Compliance"] },
+  {
+    heading: "Products",
+    links: [
+      { label: "P2P", href: "/p2p" },
+      { label: "Wallet", href: "/wallet" },
+      { label: "Swap", href: "/markets" },
+      { label: "Fees", href: "/markets" },
+    ],
+  },
+  {
+    heading: "Company",
+    links: [
+      { label: "About", href: "/" },
+      { label: "Careers", href: "/p2p" },
+      { label: "Partner Program", href: "/p2p" },
+      { label: "Status", href: "https://api-production-60fa.up.railway.app/api/health", external: true },
+    ],
+  },
+  {
+    heading: "Support",
+    links: [
+      { label: "Help Center", href: "/p2p" },
+      { label: "Academy", href: "/markets" },
+      { label: "Contact", href: "/p2p" },
+      { label: "FAQ", href: "/p2p" },
+    ],
+  },
+  {
+    heading: "Developers",
+    links: [
+      { label: "API Docs", href: "https://api-production-60fa.up.railway.app/api/docs", external: true },
+      { label: "WebSocket", href: "/demo-trading" },
+      { label: "Sandbox", href: "/demo-trading" },
+      { label: "System Status", href: "https://api-production-60fa.up.railway.app/api/health", external: true },
+    ],
+  },
+  {
+    heading: "Legal",
+    links: [
+      { label: "Privacy", href: "/" },
+      { label: "Terms", href: "/" },
+      { label: "Risk Disclosure", href: "/" },
+      { label: "Compliance", href: "/" },
+    ],
+  },
 ];
 
 const workflow = [
@@ -575,7 +616,26 @@ export default function HomePage() {
           <CardHeader><CardTitle className="text-2xl text-white">Mobile App Coming Soon</CardTitle><CardDescription>Trade, settle, and manage wallet from Android and iOS.</CardDescription></CardHeader>
           <CardContent className="space-y-5">
             <div className="mx-auto w-full max-w-[250px] rounded-[2rem] border border-zinc-700 bg-zinc-950/80 p-4"><div className="rounded-[1.4rem] border border-emerald-900/40 bg-gradient-to-b from-emerald-950/30 to-zinc-950 p-3"><p className="text-xs uppercase tracking-wide text-emerald-200">Xorviqa App</p><div className="mt-3 space-y-2"><div className="h-8 rounded-lg bg-zinc-900/90" /><div className="h-8 rounded-lg bg-zinc-900/80" /><div className="h-8 rounded-lg bg-zinc-900/70" /></div></div></div>
-            <div className="grid gap-2 sm:grid-cols-2"><Button variant="outline" className="gap-2"><Smartphone className="h-4 w-4" />Android</Button><Button variant="outline" className="gap-2"><Smartphone className="h-4 w-4" />iOS</Button></div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button
+                variant="outline"
+                className="gap-2"
+                type="button"
+                onClick={() => toast.info("Android app is coming soon.")}
+              >
+                <Smartphone className="h-4 w-4" />
+                Android
+              </Button>
+              <Button
+                variant="outline"
+                className="gap-2"
+                type="button"
+                onClick={() => toast.info("iOS app is coming soon.")}
+              >
+                <Smartphone className="h-4 w-4" />
+                iOS
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </section>
@@ -611,7 +671,30 @@ export default function HomePage() {
           {footerColumns.map((column) => (
             <div key={column.heading} className="space-y-2">
               <p className="text-sm font-semibold text-white">{column.heading}</p>
-              <div className="space-y-1.5">{column.links.map((link) => <p key={link} className="text-sm text-slate-400 transition hover:text-emerald-300">{link}</p>)}</div>
+              <div className="space-y-1.5">
+                {column.links.map((link) =>
+                  link.external ? (
+                    <a
+                      key={link.label}
+                      href={link.href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block text-sm text-slate-400 transition hover:text-emerald-300"
+                    >
+                      {link.label}
+                    </a>
+                  ) : (
+                    <Link
+                      key={link.label}
+                      href={link.href}
+                      prefetch={false}
+                      className="block text-sm text-slate-400 transition hover:text-emerald-300"
+                    >
+                      {link.label}
+                    </Link>
+                  ),
+                )}
+              </div>
             </div>
           ))}
         </div>

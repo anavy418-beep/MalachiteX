@@ -18,6 +18,7 @@ import { LightweightMarketChart } from "@/components/markets/lightweight-market-
 type TradeDashboardTab = "ALL" | "OPEN" | "COMPLETED" | "CANCELLED" | "DISPUTED";
 type TradeDirection = "BUY" | "SELL";
 type DashboardStatus = "OPEN" | "PAID" | "RELEASED" | "COMPLETED" | "CANCELLED" | "DISPUTED";
+type ChartStreamState = "LIVE" | "RECONNECTING" | "DELAYED";
 
 type PairMarketSummary = {
   symbol: string;
@@ -43,7 +44,18 @@ type PositionSummary = {
 const PAGE_SIZE = 8;
 const CHART_INTERVAL = "15m";
 const CHART_LIMIT = 96;
-const QUICK_PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"];
+const QUICK_PAIRS = [
+  "BTC/USDT",
+  "ETH/USDT",
+  "SOL/USDT",
+  "BNB/USDT",
+  "XRP/USDT",
+  "DOGE/USDT",
+  "ADA/USDT",
+  "AVAX/USDT",
+  "LINK/USDT",
+  "TON/USDT",
+];
 
 function toDashboardStatus(status: string): DashboardStatus {
   const normalized = status.toUpperCase();
@@ -234,6 +246,7 @@ export default function TradesPage() {
   const [marketSummaryError, setMarketSummaryError] = useState<string | null>(null);
   const [chartCandles, setChartCandles] = useState<MarketCandle[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
+  const [chartStreamState, setChartStreamState] = useState<ChartStreamState>("DELAYED");
 
   useEffect(() => {
     if (isBootstrapping) return;
@@ -252,16 +265,7 @@ export default function TradesPage() {
       setLoading(true);
       setError(null);
 
-      const token = tokenStore.accessToken;
-      if (!token) {
-        if (active) {
-          setTrades([]);
-          setWallet(null);
-          setLoading(false);
-          setError("Session expired. Please sign in again.");
-        }
-        return;
-      }
+      const token = tokenStore.accessToken ?? undefined;
 
       try {
         const [tradePayload, walletPayload] = await Promise.all([
@@ -308,6 +312,8 @@ export default function TradesPage() {
     const loadMarketContext = async () => {
       setMarketSummaryLoading(true);
       setChartLoading(true);
+      setChartStreamState("DELAYED");
+      let summaryAnchorPrice = "100";
 
       try {
         const overview = await marketsService.getOverview([selectedMarketSymbol]);
@@ -325,13 +331,16 @@ export default function TradesPage() {
             quoteVolume: selectedPair.quoteVolume,
             updatedAt: selectedPair.updatedAt || Date.now(),
           });
+          summaryAnchorPrice = selectedPair.lastPrice;
           setMarketSummaryError(null);
         } else {
           setMarketSummary(null);
           setMarketSummaryError("Pair market snapshot unavailable.");
+          console.warn("[trade-market] fallback reason: missing summary pair", { symbol: selectedMarketSymbol });
         }
       } catch (marketErr) {
         if (!active) return;
+        console.warn("[trade-market] fallback reason: market summary fetch failed", marketErr);
         setMarketSummaryError(toMarketDataErrorMessage(marketErr, "Unable to load market summary."));
       } finally {
         if (active) setMarketSummaryLoading(false);
@@ -352,14 +361,16 @@ export default function TradesPage() {
         const normalized = toKlineCandles(selectedMarketSymbol, payload);
         if (normalized.length > 0) {
           setChartCandles(normalized);
+          const latestCandle = normalized[normalized.length - 1];
+          summaryAnchorPrice = latestCandle?.close ?? summaryAnchorPrice;
         } else {
-          const anchor = marketSummary?.lastPrice ?? "100";
-          setChartCandles(buildDemoCandles(selectedMarketSymbol, anchor));
+          console.warn("[trade-market] fallback reason: empty candle payload", { symbol: selectedMarketSymbol });
+          setChartCandles(buildDemoCandles(selectedMarketSymbol, summaryAnchorPrice));
         }
-      } catch {
+      } catch (chartErr) {
         if (!active) return;
-        const anchor = marketSummary?.lastPrice ?? "100";
-        setChartCandles(buildDemoCandles(selectedMarketSymbol, anchor));
+        console.warn("[trade-market] fallback reason: candle REST request failed", chartErr);
+        setChartCandles(buildDemoCandles(selectedMarketSymbol, summaryAnchorPrice));
       } finally {
         if (active) setChartLoading(false);
       }
@@ -369,6 +380,183 @@ export default function TradesPage() {
 
     return () => {
       active = false;
+    };
+  }, [selectedMarketSymbol, refreshNonce]);
+
+  useEffect(() => {
+    let active = true;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let receivedUpdate = false;
+    const streamSymbol = selectedMarketSymbol.toLowerCase();
+    const streamUrl = `wss://stream.binance.com:9443/stream?streams=${streamSymbol}@kline_${CHART_INTERVAL}/${streamSymbol}@ticker`;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    const connect = () => {
+      if (!active) return;
+      clearReconnectTimer();
+
+      try {
+        ws = new WebSocket(streamUrl);
+      } catch (error) {
+        console.error("[trade-market] websocket connection failed", { symbol: selectedMarketSymbol, interval: CHART_INTERVAL, error });
+        setChartStreamState("DELAYED");
+        reconnectTimer = setTimeout(connect, 2_000);
+        return;
+      }
+
+      ws.onopen = () => {
+        if (!active) return;
+        console.info("[trade-market] websocket connected", { symbol: selectedMarketSymbol, interval: CHART_INTERVAL });
+        console.info("[trade-market] subscribed symbol", { symbol: selectedMarketSymbol, interval: CHART_INTERVAL, streamUrl });
+      };
+
+      ws.onmessage = (event) => {
+        if (!active) return;
+
+        let payload: unknown;
+        try {
+          payload = JSON.parse(event.data);
+        } catch (parseError) {
+          console.warn("[trade-market] websocket payload parse failed", parseError);
+          return;
+        }
+
+        const data =
+          payload && typeof payload === "object" && "data" in payload
+            ? (payload as { data?: unknown }).data
+            : payload;
+        if (!data || typeof data !== "object") return;
+
+        const record = data as Record<string, unknown>;
+        const eventType = String(record.e ?? "");
+
+        if (eventType === "kline" && record.k && typeof record.k === "object") {
+          const kline = record.k as Record<string, unknown>;
+          const openTime = Number(kline.t);
+          const closeTime = Number(kline.T);
+          const updateTime = Number(record.E ?? Date.now());
+          if (!Number.isFinite(openTime) || !Number.isFinite(closeTime)) return;
+
+          const liveCandle: MarketCandle = {
+            symbol: selectedMarketSymbol,
+            interval: CHART_INTERVAL,
+            openTime,
+            closeTime,
+            open: String(kline.o ?? "0"),
+            high: String(kline.h ?? "0"),
+            low: String(kline.l ?? "0"),
+            close: String(kline.c ?? "0"),
+            volume: String(kline.v ?? "0"),
+            quoteVolume: String(kline.q ?? "0"),
+            tradeCount: Number(kline.n ?? 0),
+            isClosed: Boolean(kline.x),
+            updatedAt: Number.isFinite(updateTime) ? updateTime : Date.now(),
+          };
+
+          setChartCandles((previous) => {
+            if (previous.length === 0) return [liveCandle];
+            const last = previous[previous.length - 1];
+            if (last.openTime === liveCandle.openTime) {
+              return [...previous.slice(0, -1), liveCandle];
+            }
+            return [...previous, liveCandle].slice(-CHART_LIMIT);
+          });
+
+          setMarketSummary((previous) => {
+            const base = previous ?? {
+              symbol: selectedMarketSymbol,
+              displaySymbol: toPairLabel(selectedMarketSymbol),
+              lastPrice: "0",
+              changePercent: "0",
+              highPrice: "0",
+              lowPrice: "0",
+              quoteVolume: "0",
+              updatedAt: Date.now(),
+            };
+            return {
+              ...base,
+              lastPrice: liveCandle.close,
+              updatedAt: liveCandle.updatedAt,
+            };
+          });
+
+          receivedUpdate = true;
+          setChartStreamState("LIVE");
+          setMarketSummaryError(null);
+          console.debug("[trade-market] candle update received", {
+            symbol: selectedMarketSymbol,
+            interval: CHART_INTERVAL,
+            openTime,
+            close: liveCandle.close,
+          });
+          return;
+        }
+
+        if (eventType === "24hrTicker") {
+          const updatedAt = Number(record.E ?? Date.now());
+          setMarketSummary((previous) => {
+            const base = previous ?? {
+              symbol: selectedMarketSymbol,
+              displaySymbol: toPairLabel(selectedMarketSymbol),
+              lastPrice: "0",
+              changePercent: "0",
+              highPrice: "0",
+              lowPrice: "0",
+              quoteVolume: "0",
+              updatedAt: Date.now(),
+            };
+
+            return {
+              ...base,
+              symbol: selectedMarketSymbol,
+              displaySymbol: base.displaySymbol || toPairLabel(selectedMarketSymbol),
+              lastPrice: typeof record.c === "string" ? record.c : base.lastPrice,
+              changePercent: typeof record.P === "string" ? record.P : base.changePercent,
+              highPrice: typeof record.h === "string" ? record.h : base.highPrice,
+              lowPrice: typeof record.l === "string" ? record.l : base.lowPrice,
+              quoteVolume: typeof record.q === "string" ? record.q : base.quoteVolume,
+              updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+            };
+          });
+
+          receivedUpdate = true;
+          setChartStreamState("LIVE");
+          setMarketSummaryError(null);
+        }
+      };
+
+      ws.onerror = (error) => {
+        if (!active) return;
+        console.warn("[trade-market] websocket error", { symbol: selectedMarketSymbol, interval: CHART_INTERVAL, error });
+      };
+
+      ws.onclose = () => {
+        if (!active) return;
+        console.warn("[trade-market] websocket disconnected", {
+          symbol: selectedMarketSymbol,
+          interval: CHART_INTERVAL,
+          receivedUpdate,
+        });
+        setChartStreamState("RECONNECTING");
+        reconnectTimer = setTimeout(connect, 2_000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      active = false;
+      clearReconnectTimer();
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        ws.close();
+      }
     };
   }, [selectedMarketSymbol, refreshNonce]);
 
@@ -592,7 +780,7 @@ export default function TradesPage() {
           <Card className="overflow-hidden border-zinc-800 bg-zinc-950/65">
             <CardHeader>
               <CardTitle className="text-lg">Chart Area</CardTitle>
-              <CardDescription>{toPairLabel(selectedMarketSymbol)} {CHART_INTERVAL} view with resilient fallback candles.</CardDescription>
+              <CardDescription>{toPairLabel(selectedMarketSymbol)} {CHART_INTERVAL} live stream with resilient fallback candles.</CardDescription>
             </CardHeader>
             <CardContent>
               {chartLoading && chartCandles.length === 0 ? (
@@ -603,7 +791,7 @@ export default function TradesPage() {
                   symbol={selectedMarketSymbol}
                   interval={CHART_INTERVAL}
                   currentPrice={marketSummary?.lastPrice ?? null}
-                  streamState="DELAYED"
+                  streamState={chartStreamState}
                 />
               )}
             </CardContent>

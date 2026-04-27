@@ -134,19 +134,7 @@ export default function DashboardPage() {
 
     (async () => {
       setLoading(true);
-      const token = tokenStore.accessToken;
-      if (!token) {
-        setWallet(null);
-        setTrades([]);
-        setOffers([]);
-        setWalletFallbackActive(false);
-        setTradesFallbackActive(true);
-        setOffersFallbackActive(true);
-        setIsDemo(true);
-        setError("Live dashboard session is syncing. Showing your latest safe snapshot until access is ready.");
-        setLoading(false);
-        return;
-      }
+      const token = tokenStore.accessToken ?? undefined;
 
       const [walletResult, tradesResult, offersResult] = await Promise.allSettled([
         walletService.getWallet(token),
