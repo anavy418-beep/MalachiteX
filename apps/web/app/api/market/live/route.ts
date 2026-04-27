@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const COINGECKO_MARKETS_ENDPOINT =
-  "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1&sparkline=false&price_change_percentage=24h";
+  "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1&sparkline=true&price_change_percentage=24h";
 const FALLBACK_ICON_PATH = "/icons/coin-fallback.png";
 const MAX_ATTEMPTS = 2;
 const RETRY_BASE_DELAY_MS = 1_000;
@@ -22,6 +22,9 @@ type CoinGeckoMarketRow = {
   total_volume: number;
   price_change_percentage_24h: number | null;
   price_change_percentage_24h_in_currency?: number | null;
+  sparkline_in_7d?: {
+    price?: number[];
+  };
 };
 
 type NormalizedMarketRow = {
@@ -78,6 +81,12 @@ function normalizeMarketRow(coin: CoinGeckoMarketRow): NormalizedMarketRow {
     0;
   const safePrice = Number.isFinite(coin.current_price) ? coin.current_price : 0;
   const baseline = safePrice !== 0 && Number.isFinite(change24h) ? safePrice / (1 + change24h / 100) : safePrice;
+  const trend = Array.isArray(coin.sparkline_in_7d?.price)
+    ? coin.sparkline_in_7d?.price
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .slice(-96)
+    : [];
+  const safeTrend = trend.length >= 2 ? trend : [baseline, safePrice];
 
   return {
     id: coin.id,
@@ -88,7 +97,7 @@ function normalizeMarketRow(coin: CoinGeckoMarketRow): NormalizedMarketRow {
     change24h: Number.isFinite(change24h) ? change24h : 0,
     marketCap: Number.isFinite(coin.market_cap) ? coin.market_cap : 0,
     volume24h: Number.isFinite(coin.total_volume) ? coin.total_volume : 0,
-    trend: [baseline, safePrice],
+    trend: safeTrend,
   };
 }
 

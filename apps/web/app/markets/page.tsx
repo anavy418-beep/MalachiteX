@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Suspense, memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Activity,
   ArrowDownRight,
@@ -17,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { MarketChartShell } from "@/components/markets/market-chart-shell";
+import { MarketSparkline, type SparklinePoint } from "@/components/markets/market-sparkline";
 import { MARKET_CATEGORIES, type MarketCategory } from "@/lib/mock-market-data";
 import {
   buildMarketSelectionPath,
@@ -60,6 +61,10 @@ const MARKET_MIN_REFRESH_INTERVAL_MS = 30_000;
 const MARKET_RETRY_BASE_MS = 30_000;
 const MARKET_RETRY_MAX_MS = 180_000;
 const MANUAL_RETRY_COOLDOWN_MS = 8_000;
+const SPARKLINE_INTERVAL: (typeof MARKET_TIMEFRAMES)[number] = "15m";
+const SPARKLINE_WINDOW_SIZE = 96;
+const SPARKLINE_BOOTSTRAP_CONCURRENCY = 6;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 type CoinGeckoMarketItem = {
   id: string;
@@ -157,6 +162,8 @@ type LiveStatSnapshot = {
   quoteVolume: string;
 };
 
+type SparklineBySymbol = Record<string, SparklinePoint[]>;
+
 const STABLE_SYMBOLS = new Set(["USDT", "USDC", "DAI", "FDUSD", "USDE"]);
 const MEME_SYMBOLS = new Set(["DOGE", "SHIB", "PEPE", "BONK", "WIF", "FLOKI"]);
 const EXCHANGE_SYMBOLS = new Set(["BNB", "OKB", "LEO", "BGB", "CRO", "KCS"]);
@@ -175,6 +182,84 @@ function inferCategory(coin: CoinGeckoMarketItem): MarketCategory {
   if (AI_WEB3_SYMBOLS.has(symbol)) return "AI / Web3";
   if (coin.marketCap >= 10_000_000_000) return "Large Cap";
   return "Layer 1";
+}
+
+function toUsdtPairSymbol(baseSymbol: string) {
+  return normalizeMarketSymbol(`${baseSymbol}USDT`, "");
+}
+
+function parseFiniteNumber(value: string | number | null | undefined) {
+  const parsed = typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildSparklinePointsFromCandles(candles: MarketCandle[]) {
+  return candles
+    .map((candle) => {
+      const value = parseFiniteNumber(candle.close);
+      if (value === null) return null;
+      return {
+        time: Number.isFinite(candle.closeTime) ? candle.closeTime : candle.openTime,
+        value,
+      } satisfies SparklinePoint;
+    })
+    .filter((point): point is SparklinePoint => Boolean(point))
+    .sort((left, right) => left.time - right.time)
+    .slice(-SPARKLINE_WINDOW_SIZE);
+}
+
+function buildSparklinePointsFromTrend(trend: number[]) {
+  const values = trend
+    .map((value) => parseFiniteNumber(value))
+    .filter((value): value is number => value !== null && value > 0)
+    .slice(-SPARKLINE_WINDOW_SIZE);
+
+  if (values.length < 2) {
+    return [];
+  }
+
+  const now = Date.now();
+  const totalPoints = values.length;
+  const stepMs = ONE_DAY_MS / Math.max(totalPoints - 1, 1);
+
+  return values.map((value, index) => ({
+    time: Math.floor(now - (totalPoints - 1 - index) * stepMs),
+    value,
+  })) satisfies SparklinePoint[];
+}
+
+function seedSparklineFromTicker(ticker: MarketTickerSnapshot) {
+  const open = parseFiniteNumber(ticker.openPrice);
+  const last = parseFiniteNumber(ticker.lastPrice);
+  if (open === null || last === null) return [];
+
+  const endTime = Number.isFinite(ticker.closeTime) ? ticker.closeTime : Date.now();
+  const startTime = Number.isFinite(ticker.openTime) ? ticker.openTime : endTime - ONE_DAY_MS;
+
+  return [
+    { time: startTime, value: open },
+    { time: endTime, value: last },
+  ] satisfies SparklinePoint[];
+}
+
+function appendSparklinePoint(current: SparklinePoint[], incoming: SparklinePoint) {
+  if (current.length === 0) {
+    return [incoming];
+  }
+
+  const last = current[current.length - 1];
+  if (incoming.time === last.time) {
+    if (incoming.value === last.value) {
+      return current;
+    }
+    return [...current.slice(0, -1), incoming];
+  }
+
+  if (incoming.time < last.time) {
+    return current;
+  }
+
+  return [...current, incoming].slice(-SPARKLINE_WINDOW_SIZE);
 }
 
 function toLiveMarketCoin(coin: CoinGeckoMarketItem): LiveMarketCoin {
@@ -387,6 +472,7 @@ function MarketsPageContent() {
   const [marketCategory, setMarketCategory] = useState<(typeof MARKET_CATEGORIES)[number]>("All");
   const [marketSort, setMarketSort] = useState<MarketSortOption>("market_cap");
   const [marketData, setMarketData] = useState<LiveMarketCoin[]>([]);
+  const [sparklineBySymbol, setSparklineBySymbol] = useState<SparklineBySymbol>({});
   const [marketLoading, setMarketLoading] = useState(true);
   const [marketError, setMarketError] = useState<string | null>(null);
   const [marketRefreshNonce, setMarketRefreshNonce] = useState(0);
@@ -405,6 +491,7 @@ function MarketsPageContent() {
   const deferredSearch = useDeferredValue(search);
   const hasMarketSnapshotRef = useRef(false);
   const retryCooldownTimerRef = useRef<number | null>(null);
+  const sparklineBootstrappedSymbolsRef = useRef(new Set<string>());
 
   const selectedPair = useMemo(
     () => [...overviewPairs, ...searchResults].find((pair) => pair.symbol === selectedSymbol) ?? null,
@@ -466,6 +553,91 @@ function MarketsPageContent() {
 
     return sorted;
   }, [marketCategory, marketData, marketSearch, marketSort]);
+  const marketPairSymbols = useMemo(() => {
+    const symbols = new Set<string>();
+    marketData.forEach((coin) => {
+      const pairSymbol = toUsdtPairSymbol(coin.symbol);
+      if (pairSymbol) {
+        symbols.add(pairSymbol);
+      }
+    });
+    return [...symbols];
+  }, [marketData]);
+  const socketWatchSymbols = useMemo(
+    () => [...new Set([...TRACKED_SYMBOLS, selectedSymbol, ...marketPairSymbols])],
+    [marketPairSymbols, selectedSymbol],
+  );
+  const openDemoTrading = useCallback(
+    (pairSymbol: string) => {
+      if (!pairSymbol) return;
+      router.push(`/demo-trading?symbol=${encodeURIComponent(pairSymbol)}`);
+    },
+    [router],
+  );
+  const applyTickersToMarketRows = useCallback((tickers: MarketTickerSnapshot[]) => {
+    if (tickers.length === 0) return;
+    const tickerBySymbol = new Map(tickers.map((ticker) => [ticker.symbol, ticker]));
+
+    setMarketData((current) => {
+      let changed = false;
+      const next = current.map((coin) => {
+        const pairSymbol = toUsdtPairSymbol(coin.symbol);
+        if (!pairSymbol) return coin;
+        const ticker = tickerBySymbol.get(pairSymbol);
+        if (!ticker) return coin;
+
+        const nextPrice = parseFiniteNumber(ticker.lastPrice);
+        const nextChange24h = parseFiniteNumber(ticker.priceChangePercent);
+        const nextVolume24h = parseFiniteNumber(ticker.quoteVolume);
+
+        const updated: LiveMarketCoin = {
+          ...coin,
+          price: nextPrice ?? coin.price,
+          change24h: nextChange24h ?? coin.change24h,
+          volume24h: nextVolume24h ?? coin.volume24h,
+        };
+
+        if (
+          updated.price === coin.price &&
+          updated.change24h === coin.change24h &&
+          updated.volume24h === coin.volume24h
+        ) {
+          return coin;
+        }
+
+        changed = true;
+        return updated;
+      });
+
+      return changed ? next : current;
+    });
+  }, []);
+  const applyTickersToSparklines = useCallback((tickers: MarketTickerSnapshot[]) => {
+    if (tickers.length === 0) return;
+
+    setSparklineBySymbol((current) => {
+      let changed = false;
+      const next: SparklineBySymbol = { ...current };
+
+      tickers.forEach((ticker) => {
+        const nextValue = parseFiniteNumber(ticker.lastPrice);
+        if (nextValue === null) return;
+
+        const point: SparklinePoint = {
+          time: Number.isFinite(ticker.updatedAt) ? ticker.updatedAt : Date.now(),
+          value: nextValue,
+        };
+        const seeded = next[ticker.symbol] ?? seedSparklineFromTicker(ticker);
+        const merged = appendSparklinePoint(seeded, point);
+        if (merged !== next[ticker.symbol]) {
+          next[ticker.symbol] = merged;
+          changed = true;
+        }
+      });
+
+      return changed ? next : current;
+    });
+  }, []);
 
   useEffect(() => {
     hasMarketSnapshotRef.current = marketData.length > 0;
@@ -478,6 +650,94 @@ function MarketsPageContent() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const allowed = new Set(marketPairSymbols);
+    sparklineBootstrappedSymbolsRef.current.forEach((symbol) => {
+      if (!allowed.has(symbol)) {
+        sparklineBootstrappedSymbolsRef.current.delete(symbol);
+      }
+    });
+
+    setSparklineBySymbol((current) => {
+      let changed = false;
+      const next: SparklineBySymbol = {};
+      Object.entries(current).forEach(([symbol, points]) => {
+        if (!allowed.has(symbol)) {
+          changed = true;
+          return;
+        }
+        next[symbol] = points;
+      });
+      return changed ? next : current;
+    });
+  }, [marketPairSymbols]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const pending = marketPairSymbols.filter((symbol) => !sparklineBootstrappedSymbolsRef.current.has(symbol));
+    if (pending.length === 0) {
+      return;
+    }
+    pending.forEach((symbol) => sparklineBootstrappedSymbolsRef.current.add(symbol));
+
+    const queue = [...pending];
+    const bootstrapFromCandles = async () => {
+      const collected: SparklineBySymbol = {};
+
+      async function worker() {
+        while (queue.length > 0 && !cancelled) {
+          const symbol = queue.shift();
+          if (!symbol) return;
+
+          try {
+            const response = await marketsService.getCandles(
+              symbol,
+              SPARKLINE_INTERVAL,
+              SPARKLINE_WINDOW_SIZE,
+            );
+            const points = buildSparklinePointsFromCandles(response.candles);
+            if (points.length >= 2) {
+              collected[symbol] = points;
+            }
+          } catch {
+            // Keep non-blocking sparkline bootstrap. Live tick stream will still populate.
+          }
+        }
+      }
+
+      const workerCount = Math.min(SPARKLINE_BOOTSTRAP_CONCURRENCY, queue.length);
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+      if (cancelled || Object.keys(collected).length === 0) {
+        return;
+      }
+
+      setSparklineBySymbol((current) => {
+        let changed = false;
+        const next = { ...current };
+
+        Object.entries(collected).forEach(([symbol, points]) => {
+          const existing = next[symbol];
+          const isSameSeries =
+            existing?.length === points.length &&
+            existing.every((point, index) => point.time === points[index]?.time && point.value === points[index]?.value);
+          if (isSameSeries) return;
+          next[symbol] = points;
+          changed = true;
+        });
+
+        return changed ? next : current;
+      });
+    };
+
+    void bootstrapFromCandles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [marketPairSymbols]);
 
   useEffect(() => {
     let active = true;
@@ -528,6 +788,27 @@ function MarketsPageContent() {
         }
 
         setMarketData(mappedRows);
+        setSparklineBySymbol((current) => {
+          let changed = false;
+          const next = { ...current };
+
+          mappedRows.forEach((coin) => {
+            const pairSymbol = toUsdtPairSymbol(coin.symbol);
+            if (!pairSymbol || (next[pairSymbol] && next[pairSymbol].length >= 2)) {
+              return;
+            }
+
+            const seededPoints = buildSparklinePointsFromTrend(coin.trend);
+            if (seededPoints.length < 2) {
+              return;
+            }
+
+            next[pairSymbol] = seededPoints;
+            changed = true;
+          });
+
+          return changed ? next : current;
+        });
         setMarketFeedMode(payload.isStale ? "CACHED" : "LIVE");
 
         const lastUpdatedAt = payload.lastUpdated ? new Date(payload.lastUpdated) : new Date();
@@ -657,12 +938,16 @@ function MarketsPageContent() {
       onBootstrap(tickers) {
         if (tickers.length === 0) return;
         setOverviewPairs((current) => mergeTickers(current, tickers, TRACKED_SYMBOLS));
+        applyTickersToMarketRows(tickers);
+        applyTickersToSparklines(tickers);
       },
       onTicker(ticker) {
         setOverviewPairs((current) => mergeTickers(current, [ticker], TRACKED_SYMBOLS));
         setSearchResults((current) => mergeTickers(current, [ticker]));
         setTopGainers((current) => replaceTicker(current, ticker));
         setTopLosers((current) => replaceTicker(current, ticker));
+        applyTickersToMarketRows([ticker]);
+        applyTickersToSparklines([ticker]);
       },
       onOrderBookBootstrap(payload) {
         if (payload.symbol === selectedSymbol) {
@@ -685,19 +970,22 @@ function MarketsPageContent() {
       },
     });
 
-    connection.watchSymbols(TRACKED_SYMBOLS);
-    connection.watchSymbols([selectedSymbol]);
+    connection.watchSymbols(socketWatchSymbols);
     connection.watchOrderBook(selectedSymbol);
     connection.watchRecentTrades(selectedSymbol, 60);
 
     return () => {
-      connection.unwatchSymbols(TRACKED_SYMBOLS);
-      connection.unwatchSymbols([selectedSymbol]);
+      connection.unwatchSymbols(socketWatchSymbols);
       connection.unwatchOrderBook(selectedSymbol);
       connection.unwatchRecentTrades(selectedSymbol);
       connection.disconnect();
     };
-  }, [selectedInterval, selectedSymbol]);
+  }, [
+    applyTickersToMarketRows,
+    applyTickersToSparklines,
+    selectedSymbol,
+    socketWatchSymbols,
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -1108,99 +1396,35 @@ function MarketsPageContent() {
                     </tr>
                   </thead>
                   <tbody>
-                    {fullMarketRows.map((coin) => (
-                      <tr key={coin.id} className="border-b border-zinc-900/80 text-slate-100">
-                        <td className="px-3 py-3">
-                          <div className="flex items-center gap-3">
-                            <img
-                              src={coin.icon}
-                              alt={`${coin.name} logo`}
-                              className="h-10 w-10 rounded-full bg-transparent object-contain"
-                              loading="lazy"
-                              decoding="async"
-                              onError={(event) => {
-                                event.currentTarget.onerror = null;
-                                event.currentTarget.src = FALLBACK_COIN_ICON;
-                              }}
-                            />
-                            <div>
-                              <p className="font-semibold">{coin.name}</p>
-                              <p className="text-xs text-slate-500">{coin.symbol}</p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-3 py-3 text-white font-medium">{formatUsd(coin.price)}</td>
-                        <td className={`px-3 py-3 font-semibold ${coin.change24h >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                          {coin.change24h >= 0 ? "+" : ""}
-                          {coin.change24h.toFixed(2)}%
-                        </td>
-                        <td className="px-3 py-3 text-slate-300">${formatCompact(coin.marketCap)}</td>
-                        <td className="px-3 py-3 text-slate-300">${formatCompact(coin.volume24h)}</td>
-                        <td className="px-3 py-3">
-                          <MiniTrend points={coin.trend} positive={coin.change24h >= 0} />
-                        </td>
-                        <td className="px-3 py-3">
-                          <div className="flex justify-end gap-2">
-                            <Button size="sm" className="h-8 px-3">
-                              Buy
-                            </Button>
-                            <Button size="sm" variant="outline" className="h-8 px-3">
-                              Trade
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                    {fullMarketRows.map((coin) => {
+                      const pairSymbol = toUsdtPairSymbol(coin.symbol);
+                      return (
+                        <MarketTableRow
+                          key={coin.id}
+                          coin={coin}
+                          pairSymbol={pairSymbol}
+                          sparklinePoints={pairSymbol ? sparklineBySymbol[pairSymbol] ?? [] : []}
+                          onOpenPair={openDemoTrading}
+                        />
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
 
               <div className="grid gap-3 lg:hidden">
-                {fullMarketRows.map((coin) => (
-                  <article key={`mobile-${coin.id}`} className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <img
-                          src={coin.icon}
-                          alt={`${coin.name} logo`}
-                          className="h-10 w-10 rounded-full bg-transparent object-contain"
-                          loading="lazy"
-                          decoding="async"
-                          onError={(event) => {
-                            event.currentTarget.onerror = null;
-                            event.currentTarget.src = FALLBACK_COIN_ICON;
-                          }}
-                        />
-                        <div>
-                          <p className="text-sm font-semibold text-slate-100">{coin.name}</p>
-                          <p className="text-xs text-slate-500">{coin.symbol}</p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm font-medium text-white">{formatUsd(coin.price)}</p>
-                        <p className={`text-xs font-semibold ${coin.change24h >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                          {coin.change24h >= 0 ? "+" : ""}
-                          {coin.change24h.toFixed(2)}%
-                        </p>
-                      </div>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-400">
-                      <p>MCap: ${formatCompact(coin.marketCap)}</p>
-                      <p>Vol: ${formatCompact(coin.volume24h)}</p>
-                    </div>
-                    <div className="mt-3 flex items-center justify-between">
-                      <MiniTrend points={coin.trend} positive={coin.change24h >= 0} />
-                      <div className="flex gap-2">
-                        <Button size="sm" className="h-8 px-3">
-                          Buy
-                        </Button>
-                        <Button size="sm" variant="outline" className="h-8 px-3">
-                          Trade
-                        </Button>
-                      </div>
-                    </div>
-                  </article>
-                ))}
+                {fullMarketRows.map((coin) => {
+                  const pairSymbol = toUsdtPairSymbol(coin.symbol);
+                  return (
+                    <MarketMobileCard
+                      key={`mobile-${coin.id}`}
+                      coin={coin}
+                      pairSymbol={pairSymbol}
+                      sparklinePoints={pairSymbol ? sparklineBySymbol[pairSymbol] ?? [] : []}
+                      onOpenPair={openDemoTrading}
+                    />
+                  );
+                })}
               </div>
             </>
           ) : null}
@@ -1451,34 +1675,198 @@ function MoversCard({
   );
 }
 
-function MiniTrend({
-  points,
-  positive,
-}: {
-  points: number[];
-  positive: boolean;
-}) {
-  const max = Math.max(...points);
-  const min = Math.min(...points);
-  const normalized = points.map((point, index) => {
-    const x = (index / (points.length - 1)) * 72;
-    const y = max === min ? 12 : 22 - ((point - min) / (max - min)) * 20;
-    return `${x},${y}`;
-  });
+interface MarketListItemProps {
+  coin: LiveMarketCoin;
+  pairSymbol: string;
+  sparklinePoints: SparklinePoint[];
+  onOpenPair: (pairSymbol: string) => void;
+}
+
+const MarketTableRow = memo(function MarketTableRow({
+  coin,
+  pairSymbol,
+  sparklinePoints,
+  onOpenPair,
+}: MarketListItemProps) {
+  const isPositive =
+    sparklinePoints.length >= 2
+      ? sparklinePoints[sparklinePoints.length - 1].value >= sparklinePoints[0].value
+      : coin.change24h >= 0;
+  const rowClickable = pairSymbol.length > 0;
 
   return (
-    <svg viewBox="0 0 72 24" className="h-6 w-[72px]">
-      <polyline
-        fill="none"
-        stroke={positive ? "#4ade80" : "#f87171"}
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        points={normalized.join(" ")}
-      />
-    </svg>
+    <tr
+      className={`border-b border-zinc-900/80 text-slate-100 transition ${
+        rowClickable ? "cursor-pointer hover:bg-zinc-900/40" : ""
+      }`}
+      onClick={rowClickable ? () => onOpenPair(pairSymbol) : undefined}
+      onKeyDown={
+        rowClickable
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpenPair(pairSymbol);
+              }
+            }
+          : undefined
+      }
+      role={rowClickable ? "button" : undefined}
+      tabIndex={rowClickable ? 0 : -1}
+      aria-label={rowClickable ? `Open ${coin.symbol} in demo trading` : undefined}
+    >
+      <td className="px-3 py-3">
+        <div className="flex items-center gap-3">
+          <img
+            src={coin.icon}
+            alt={`${coin.name} logo`}
+            className="h-10 w-10 rounded-full bg-transparent object-contain"
+            loading="lazy"
+            decoding="async"
+            onError={(event) => {
+              event.currentTarget.onerror = null;
+              event.currentTarget.src = FALLBACK_COIN_ICON;
+            }}
+          />
+          <div>
+            <p className="font-semibold">{coin.name}</p>
+            <p className="text-xs text-slate-500">{coin.symbol}</p>
+          </div>
+        </div>
+      </td>
+      <td className="px-3 py-3 text-white font-medium">{formatUsd(coin.price)}</td>
+      <td className={`px-3 py-3 font-semibold ${coin.change24h >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+        {coin.change24h >= 0 ? "+" : ""}
+        {coin.change24h.toFixed(2)}%
+      </td>
+      <td className="px-3 py-3 text-slate-300">${formatCompact(coin.marketCap)}</td>
+      <td className="px-3 py-3 text-slate-300">${formatCompact(coin.volume24h)}</td>
+      <td className="px-3 py-3">
+        <MarketSparkline points={sparklinePoints} positive={isPositive} />
+      </td>
+      <td className="px-3 py-3">
+        <div className="flex justify-end gap-2">
+          <Button
+            size="sm"
+            className="h-8 px-3"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenPair(pairSymbol);
+            }}
+            disabled={!rowClickable}
+          >
+            Buy
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 px-3"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenPair(pairSymbol);
+            }}
+            disabled={!rowClickable}
+          >
+            Trade
+          </Button>
+        </div>
+      </td>
+    </tr>
   );
-}
+});
+
+const MarketMobileCard = memo(function MarketMobileCard({
+  coin,
+  pairSymbol,
+  sparklinePoints,
+  onOpenPair,
+}: MarketListItemProps) {
+  const isPositive =
+    sparklinePoints.length >= 2
+      ? sparklinePoints[sparklinePoints.length - 1].value >= sparklinePoints[0].value
+      : coin.change24h >= 0;
+  const rowClickable = pairSymbol.length > 0;
+
+  return (
+    <article
+      className={`rounded-2xl border border-zinc-800 bg-zinc-950/60 p-3 transition ${
+        rowClickable ? "cursor-pointer hover:border-emerald-700/40" : ""
+      }`}
+      onClick={rowClickable ? () => onOpenPair(pairSymbol) : undefined}
+      onKeyDown={
+        rowClickable
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpenPair(pairSymbol);
+              }
+            }
+          : undefined
+      }
+      role={rowClickable ? "button" : undefined}
+      tabIndex={rowClickable ? 0 : -1}
+      aria-label={rowClickable ? `Open ${coin.symbol} in demo trading` : undefined}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <img
+            src={coin.icon}
+            alt={`${coin.name} logo`}
+            className="h-10 w-10 rounded-full bg-transparent object-contain"
+            loading="lazy"
+            decoding="async"
+            onError={(event) => {
+              event.currentTarget.onerror = null;
+              event.currentTarget.src = FALLBACK_COIN_ICON;
+            }}
+          />
+          <div>
+            <p className="text-sm font-semibold text-slate-100">{coin.name}</p>
+            <p className="text-xs text-slate-500">{coin.symbol}</p>
+          </div>
+        </div>
+        <div className="text-right">
+          <p className="text-sm font-medium text-white">{formatUsd(coin.price)}</p>
+          <p className={`text-xs font-semibold ${coin.change24h >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+            {coin.change24h >= 0 ? "+" : ""}
+            {coin.change24h.toFixed(2)}%
+          </p>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-400">
+        <p>MCap: ${formatCompact(coin.marketCap)}</p>
+        <p>Vol: ${formatCompact(coin.volume24h)}</p>
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <MarketSparkline points={sparklinePoints} positive={isPositive} className="w-[140px]" />
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            className="h-8 px-3"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenPair(pairSymbol);
+            }}
+            disabled={!rowClickable}
+          >
+            Buy
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 px-3"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenPair(pairSymbol);
+            }}
+            disabled={!rowClickable}
+          >
+            Trade
+          </Button>
+        </div>
+      </div>
+    </article>
+  );
+});
 
 function mergeTickers(
   current: MarketTickerSnapshot[],
