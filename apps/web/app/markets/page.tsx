@@ -1501,7 +1501,7 @@ function MarketsPageContent() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
         <div className="space-y-4">
           <Card>
             <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-4">
@@ -1642,8 +1642,10 @@ function MarketsPageContent() {
             </CardContent>
           </Card>
 
-          <OrderBook symbol={selectedSymbol} orderBook={orderBook} />
-          <RecentTradesFeed symbol={selectedSymbol} trades={recentTrades} />
+          <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-2">
+            <OrderBook symbol={selectedSymbol} orderBook={orderBook} />
+            <RecentTradesFeed symbol={selectedSymbol} trades={recentTrades} />
+          </div>
 
           <MoversCard title="Top Gainers" icon={<ArrowUpRight className="h-4 w-4 text-emerald-300" />} pairs={topGainers} />
           <MoversCard title="Top Losers" icon={<ArrowDownRight className="h-4 w-4 text-red-300" />} pairs={topLosers} />
