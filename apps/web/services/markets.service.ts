@@ -769,12 +769,34 @@ export const marketsService = {
     const setConnectionState = (state: MarketsSocketState) => {
       handlers.onConnectionStateChange?.(state);
     };
+    const logSocketDiagnostic = (
+      event: "connect" | "connect_error" | "disconnect" | "reconnect_attempt" | "reconnect" | "reconnect_failed",
+      details?: Record<string, unknown>,
+    ) => {
+      if (process.env.NODE_ENV === "production") return;
+      const payload = {
+        event,
+        resolvedSocketUrl,
+        resolvedSocketBaseUrl: socketBaseUrl,
+        resolvedSocketWsUrl: resolvedPublicApiSocketWsUrl,
+        transport: socket.io?.engine?.transport?.name,
+        ...details,
+      };
+      if (event === "connect_error" || event === "disconnect" || event === "reconnect_failed") {
+        console.warn("[markets.socket]", payload);
+        return;
+      }
+      console.info("[markets.socket]", payload);
+    };
 
     setConnectionState("connecting");
 
     socket.on("connect", () => {
       handlers.onConnect?.(true);
       setConnectionState("live");
+      logSocketDiagnostic("connect", {
+        socketId: socket.id,
+      });
 
       if (process.env.NODE_ENV !== "production") {
         const engineProtocol = socket.io?.engine?.protocol;
@@ -797,27 +819,24 @@ export const marketsService = {
     socket.on("disconnect", (reason: string) => {
       handlers.onConnect?.(false);
       setConnectionState(reason === "io client disconnect" ? "offline" : "reconnecting");
+      logSocketDiagnostic("disconnect", { reason });
     });
     socket.on("connect_error", (error: Error) => {
       setConnectionState("reconnecting");
-      if (process.env.NODE_ENV !== "production") {
-        console.warn("[markets.socket] connect_error", {
-          message: error.message,
-          resolvedSocketUrl,
-          resolvedSocketBaseUrl: socketBaseUrl,
-          resolvedSocketWsUrl: resolvedPublicApiSocketWsUrl,
-        });
-      }
+      logSocketDiagnostic("connect_error", { message: error.message });
     });
     socket.io.on("reconnect_attempt", () => {
       setConnectionState("reconnecting");
+      logSocketDiagnostic("reconnect_attempt");
     });
     socket.io.on("reconnect_failed", () => {
       setConnectionState("offline");
+      logSocketDiagnostic("reconnect_failed");
     });
     socket.io.on("reconnect", () => {
       handlers.onConnect?.(true);
       setConnectionState("live");
+      logSocketDiagnostic("reconnect");
     });
 
     socket.on("market:ticker", (ticker: MarketTickerSnapshot) => handlers.onTicker?.(ticker));

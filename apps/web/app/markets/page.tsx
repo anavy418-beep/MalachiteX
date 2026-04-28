@@ -34,6 +34,7 @@ import {
   marketsService,
   toMarketDataErrorMessage,
   type MarketCandle,
+  type MarketsSocketState,
   type MarketOrderBookSnapshot,
   type MarketRecentTrade,
   type MarketTickerSnapshot,
@@ -163,6 +164,7 @@ type LiveStatSnapshot = {
 };
 
 type SparklineBySymbol = Record<string, SparklinePoint[]>;
+type MarketFeedStatus = "LIVE_WEBSOCKET" | "LIVE_POLLING" | "REST_FALLBACK";
 
 const STABLE_SYMBOLS = new Set(["USDT", "USDC", "DAI", "FDUSD", "USDE"]);
 const MEME_SYMBOLS = new Set(["DOGE", "SHIB", "PEPE", "BONK", "WIF", "FLOKI"]);
@@ -480,10 +482,14 @@ function MarketsPageContent() {
   const [marketFeedMode, setMarketFeedMode] = useState<"LIVE" | "CACHED" | "OFFLINE">("OFFLINE");
   const [isRetryCoolingDown, setIsRetryCoolingDown] = useState(false);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
+  const [socketLifecycleState, setSocketLifecycleState] = useState<MarketsSocketState>("connecting");
   const [restFallback, setRestFallback] = useState(false);
   const [chartStreamState, setChartStreamState] = useState<"LIVE" | "RECONNECTING" | "DELAYED">("DELAYED");
   const [liveChartPrice, setLiveChartPrice] = useState<string | null>(null);
   const [liveStats, setLiveStats] = useState<LiveStatSnapshot | null>(null);
+  const [lastSocketDataAt, setLastSocketDataAt] = useState<number | null>(null);
+  const [lastSocketFailureAt, setLastSocketFailureAt] = useState<number | null>(null);
+  const [lastPollingSuccessAt, setLastPollingSuccessAt] = useState<number | null>(null);
   const [chartBootstrapError, setChartBootstrapError] = useState<string | null>(null);
   const [chartRefreshNonce, setChartRefreshNonce] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -567,6 +573,46 @@ function MarketsPageContent() {
     () => [...new Set([...TRACKED_SYMBOLS, selectedSymbol, ...marketPairSymbols])],
     [marketPairSymbols, selectedSymbol],
   );
+  const socketWatchSymbolsKey = useMemo(
+    () => [...new Set(socketWatchSymbols.map((symbol) => normalizeMarketSymbol(symbol, selectedSymbol)))]
+      .filter(Boolean)
+      .sort()
+      .join(","),
+    [selectedSymbol, socketWatchSymbols],
+  );
+  const hasFreshSocketData = useMemo(() => {
+    if (!lastSocketDataAt) return false;
+    return Date.now() - lastSocketDataAt <= 35_000;
+  }, [lastSocketDataAt]);
+  const marketFeedStatus = useMemo<MarketFeedStatus>(() => {
+    if (isSocketConnected && hasFreshSocketData) {
+      return "LIVE_WEBSOCKET";
+    }
+    if (restFallback && lastPollingSuccessAt) {
+      return "LIVE_POLLING";
+    }
+    if (socketLifecycleState === "reconnecting" || socketLifecycleState === "offline" || lastSocketFailureAt) {
+      return "REST_FALLBACK";
+    }
+    if (lastPollingSuccessAt) {
+      return "LIVE_POLLING";
+    }
+    return "LIVE_POLLING";
+  }, [hasFreshSocketData, isSocketConnected, lastPollingSuccessAt, lastSocketFailureAt, restFallback, socketLifecycleState]);
+  const marketFeedBadgeClass = useMemo(() => {
+    if (marketFeedStatus === "LIVE_WEBSOCKET") {
+      return "border-emerald-700/40 bg-emerald-500/10 text-emerald-200";
+    }
+    if (marketFeedStatus === "LIVE_POLLING") {
+      return "border-sky-700/50 bg-sky-500/10 text-sky-200";
+    }
+    return "border-amber-700/40 bg-amber-500/10 text-amber-200";
+  }, [marketFeedStatus]);
+  const marketFeedLabel = marketFeedStatus === "LIVE_WEBSOCKET"
+    ? "LIVE WebSocket"
+    : marketFeedStatus === "LIVE_POLLING"
+      ? "LIVE via polling"
+      : "REST fallback";
   const openDemoTrading = useCallback(
     (pairSymbol: string) => {
       if (!pairSymbol) return;
@@ -637,6 +683,10 @@ function MarketsPageContent() {
 
       return changed ? next : current;
     });
+  }, []);
+  const markSocketDataAsLive = useCallback(() => {
+    setLastSocketDataAt(Date.now());
+    setRestFallback(false);
   }, []);
 
   useEffect(() => {
@@ -907,7 +957,7 @@ function MarketsPageContent() {
         setSearchResults(pairSearch.pairs);
         setOrderBook(orderBookResponse.orderBook);
         setRecentTrades(recentTradesResponse.trades);
-        setRestFallback(!overview.streaming);
+        setLastPollingSuccessAt(Date.now());
       } catch (err) {
         if (cancelled) return;
         const message = toMarketDataErrorMessage(err, "Unable to load market data.");
@@ -927,21 +977,39 @@ function MarketsPageContent() {
     return () => {
       cancelled = true;
     };
-  }, [selectedInterval, selectedSymbol]);
+  }, [selectedSymbol]);
 
   useEffect(() => {
+    const symbolsToWatch = socketWatchSymbolsKey
+      .split(",")
+      .map((symbol) => symbol.trim())
+      .filter(Boolean);
     const connection = marketsService.connectSocket({
       onConnect(connected) {
         setIsSocketConnected(connected);
-        setRestFallback((current) => (connected ? false : current));
+        if (connected) {
+          setSocketLifecycleState("live");
+          setLastSocketFailureAt(null);
+        }
+      },
+      onConnectionStateChange(state) {
+        setSocketLifecycleState(state);
+        if (state !== "live") {
+          setIsSocketConnected(false);
+        }
+        if (state === "reconnecting" || state === "offline") {
+          setLastSocketFailureAt(Date.now());
+        }
       },
       onBootstrap(tickers) {
         if (tickers.length === 0) return;
+        markSocketDataAsLive();
         setOverviewPairs((current) => mergeTickers(current, tickers, TRACKED_SYMBOLS));
         applyTickersToMarketRows(tickers);
         applyTickersToSparklines(tickers);
       },
       onTicker(ticker) {
+        markSocketDataAsLive();
         setOverviewPairs((current) => mergeTickers(current, [ticker], TRACKED_SYMBOLS));
         setSearchResults((current) => mergeTickers(current, [ticker]));
         setTopGainers((current) => replaceTicker(current, ticker));
@@ -951,31 +1019,35 @@ function MarketsPageContent() {
       },
       onOrderBookBootstrap(payload) {
         if (payload.symbol === selectedSymbol) {
+          markSocketDataAsLive();
           setOrderBook(payload.orderBook);
         }
       },
       onOrderBook(nextOrderBook) {
         if (nextOrderBook.symbol === selectedSymbol) {
+          markSocketDataAsLive();
           setOrderBook(nextOrderBook);
         }
       },
       onTradesBootstrap(payload) {
         if (payload.symbol === selectedSymbol) {
+          markSocketDataAsLive();
           setRecentTrades(payload.trades);
         }
       },
       onTrade(trade) {
         if (trade.symbol !== selectedSymbol) return;
+        markSocketDataAsLive();
         setRecentTrades((current) => [trade, ...current.filter((entry) => entry.tradeId !== trade.tradeId)].slice(0, 60));
       },
     });
 
-    connection.watchSymbols(socketWatchSymbols);
+    connection.watchSymbols(symbolsToWatch);
     connection.watchOrderBook(selectedSymbol);
     connection.watchRecentTrades(selectedSymbol, 60);
 
     return () => {
-      connection.unwatchSymbols(socketWatchSymbols);
+      connection.unwatchSymbols(symbolsToWatch);
       connection.unwatchOrderBook(selectedSymbol);
       connection.unwatchRecentTrades(selectedSymbol);
       connection.disconnect();
@@ -983,8 +1055,9 @@ function MarketsPageContent() {
   }, [
     applyTickersToMarketRows,
     applyTickersToSparklines,
+    markSocketDataAsLive,
     selectedSymbol,
-    socketWatchSymbols,
+    socketWatchSymbolsKey,
   ]);
 
   useEffect(() => {
@@ -1165,7 +1238,7 @@ function MarketsPageContent() {
   }, [deferredSearch]);
 
   useEffect(() => {
-    if (isSocketConnected) return;
+    if (marketFeedStatus === "LIVE_WEBSOCKET") return;
 
     const interval = window.setInterval(() => {
       void (async () => {
@@ -1182,6 +1255,7 @@ function MarketsPageContent() {
           setOrderBook(orderBookResponse.orderBook);
           setRecentTrades(recentTradesResponse.trades);
           setRestFallback(true);
+          setLastPollingSuccessAt(Date.now());
         } catch {
           setRestFallback(true);
         }
@@ -1189,7 +1263,7 @@ function MarketsPageContent() {
     }, 12_000);
 
     return () => window.clearInterval(interval);
-  }, [isSocketConnected, selectedInterval, selectedSymbol]);
+  }, [marketFeedStatus, selectedInterval, selectedSymbol]);
 
   const displayedLastPrice = liveChartPrice ?? liveStats?.lastPrice ?? selectedPair?.lastPrice ?? null;
   const displayedChangePercent = liveStats?.priceChangePercent ?? selectedPair?.priceChangePercent ?? null;
@@ -1216,15 +1290,11 @@ function MarketsPageContent() {
                   <Signal className="h-3.5 w-3.5" />
                   Binance spot market feed
                 </span>
-                <span
-                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs ${
-                    isSocketConnected
-                      ? "border-emerald-700/40 bg-emerald-500/10 text-emerald-200"
-                      : "border-amber-700/40 bg-amber-500/10 text-amber-200"
-                  }`}
-                >
-                  {isSocketConnected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
-                  {isSocketConnected ? "WebSocket live" : "REST fallback"}
+                <span className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs ${marketFeedBadgeClass}`}>
+                  {marketFeedStatus === "LIVE_WEBSOCKET" || marketFeedStatus === "LIVE_POLLING"
+                    ? <Wifi className="h-3.5 w-3.5" />
+                    : <WifiOff className="h-3.5 w-3.5" />}
+                  {marketFeedLabel}
                 </span>
               </div>
               <p className="text-sm text-slate-300">
@@ -1591,8 +1661,17 @@ function MarketsPageContent() {
                   </p>
                   <div className="flex items-center gap-2 text-xs text-slate-500">
                     <Activity className="h-3.5 w-3.5" />
-                    {restFallback ? "Polling fallback active when streaming drops." : "Streaming active with REST safety net."}
+                    {marketFeedStatus === "LIVE_WEBSOCKET"
+                      ? "WebSocket stream active with REST safety net."
+                      : marketFeedStatus === "LIVE_POLLING"
+                        ? "WebSocket reconnecting; polling keeps prices live."
+                        : "REST fallback active while websocket reconnects."}
                   </div>
+                  {process.env.NODE_ENV !== "production" ? (
+                    <div className="text-[11px] text-slate-500">
+                      socket={socketLifecycleState} last-data={lastSocketDataAt ? new Date(lastSocketDataAt).toLocaleTimeString() : "-"} last-failure={lastSocketFailureAt ? new Date(lastSocketFailureAt).toLocaleTimeString() : "-"}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </CardContent>
