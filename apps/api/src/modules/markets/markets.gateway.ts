@@ -29,10 +29,79 @@ interface TradesWatchPayload {
   limit?: number;
 }
 
+const DEFAULT_MARKETS_SOCKET_ORIGINS = [
+  "http://localhost:3000",
+  "https://xorviqa-web.vercel.app",
+  "https://malachitex-web.vercel.app",
+];
+
+function normalizeOrigin(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (trimmed === "*") return "*";
+
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    return trimmed.replace(/\/+$/, "");
+  }
+}
+
+function parseOriginList(value?: string) {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((origin) => normalizeOrigin(origin))
+    .filter(Boolean);
+}
+
+function buildAllowedOrigins() {
+  const configuredOrigins = [
+    ...parseOriginList(process.env.CORS_ORIGIN),
+    ...parseOriginList(process.env.FRONTEND_URL),
+  ];
+  const mergedOrigins = configuredOrigins.length > 0
+    ? [...configuredOrigins, ...DEFAULT_MARKETS_SOCKET_ORIGINS]
+    : DEFAULT_MARKETS_SOCKET_ORIGINS;
+
+  return new Set(mergedOrigins.map((origin) => normalizeOrigin(origin)).filter(Boolean));
+}
+
+function isAllowedMarketsSocketOrigin(origin?: string) {
+  const allowedOrigins = buildAllowedOrigins();
+  const allowAnyOrigin = allowedOrigins.has("*");
+
+  if (!origin) {
+    return true;
+  }
+
+  if (allowAnyOrigin) {
+    return true;
+  }
+
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (allowedOrigins.has(normalizedOrigin)) {
+    return true;
+  }
+
+  if (
+    process.env.ALLOW_VERCEL_PREVIEW_ORIGINS !== "false" &&
+    normalizedOrigin.includes("://") &&
+    normalizedOrigin.endsWith(".vercel.app")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 @WebSocketGateway({
   namespace: "markets",
   cors: {
-    origin: "*",
+    origin: (origin, callback) => {
+      callback(null, isAllowedMarketsSocketOrigin(origin));
+    },
+    credentials: true,
   },
 })
 export class MarketsGateway implements OnGatewayConnection, OnGatewayDisconnect {

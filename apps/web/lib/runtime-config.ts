@@ -38,6 +38,45 @@ function normalizeApiPathname(rawPathname: string) {
   return `/${normalizedSegments.join("/")}`;
 }
 
+function normalizeSocketPathname(rawPathname: string) {
+  const segments = rawPathname
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  const normalizedSegments: string[] = [];
+  for (const segment of segments) {
+    const canonicalSegment = segment.toLowerCase() === "api" ? "api" : segment;
+    const previousSegment = normalizedSegments[normalizedSegments.length - 1];
+    if (canonicalSegment === "api" && previousSegment?.toLowerCase() === "api") {
+      continue;
+    }
+    normalizedSegments.push(canonicalSegment);
+  }
+
+  while (normalizedSegments[normalizedSegments.length - 1]?.toLowerCase() === "api") {
+    normalizedSegments.pop();
+  }
+
+  if (normalizedSegments.length === 0) {
+    return "/";
+  }
+
+  return `/${normalizedSegments.join("/")}`;
+}
+
+function toWebSocketProtocolUrl(url: string) {
+  const candidate = url.trim();
+  if (!candidate) return "";
+  if (candidate.startsWith("https://")) {
+    return `wss://${candidate.slice("https://".length)}`;
+  }
+  if (candidate.startsWith("http://")) {
+    return `ws://${candidate.slice("http://".length)}`;
+  }
+  return candidate;
+}
+
 function pointsToLocalhost(value: string) {
   if (!isAbsoluteHttpUrl(value)) return false;
 
@@ -66,6 +105,25 @@ function normalizeApiBaseUrl(rawValue: string) {
     return trimTrailingSlash(parsed.toString());
   } catch {
     return value;
+  }
+}
+
+function normalizeApiSocketUrl(rawValue: string) {
+  const value = trimTrailingSlash(rawValue.trim());
+  if (!value) return "";
+
+  if (!isAbsoluteHttpUrl(value)) {
+    return trimTrailingSlash(value.replace(/(\/api)+$/i, ""));
+  }
+
+  try {
+    const parsed = new URL(value);
+    parsed.pathname = normalizeSocketPathname(parsed.pathname);
+    parsed.search = "";
+    parsed.hash = "";
+    return trimTrailingSlash(parsed.toString());
+  } catch {
+    return trimTrailingSlash(value.replace(/(\/api)+$/i, ""));
   }
 }
 
@@ -99,16 +157,16 @@ function resolveApiSocketUrl(apiBaseUrl: string) {
     explicitSocketUrl.length > 0 &&
     !(process.env.NODE_ENV === "production" && pointsToLocalhost(explicitSocketUrl))
   ) {
-    return trimTrailingSlash(explicitSocketUrl);
+    return normalizeApiSocketUrl(explicitSocketUrl);
   }
 
   if (process.env.NODE_ENV === "production") {
-    return DEFAULT_PRODUCTION_API_SOCKET_URL;
+    return normalizeApiSocketUrl(DEFAULT_PRODUCTION_API_SOCKET_URL);
   }
 
   if (apiBaseUrl.startsWith("http://") || apiBaseUrl.startsWith("https://")) {
     try {
-      return new URL(apiBaseUrl).origin;
+      return normalizeApiSocketUrl(new URL(apiBaseUrl).origin);
     } catch {
       return "";
     }
@@ -119,3 +177,4 @@ function resolveApiSocketUrl(apiBaseUrl: string) {
 
 export const resolvedPublicApiBaseUrl = resolveApiBaseUrl();
 export const resolvedPublicApiSocketUrl = resolveApiSocketUrl(resolvedPublicApiBaseUrl);
+export const resolvedPublicApiSocketWsUrl = toWebSocketProtocolUrl(resolvedPublicApiSocketUrl);

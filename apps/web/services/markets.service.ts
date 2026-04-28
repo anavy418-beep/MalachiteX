@@ -3,6 +3,7 @@ import { apiRequest } from "@/lib/api";
 import {
   resolvedPublicApiBaseUrl,
   resolvedPublicApiSocketUrl,
+  resolvedPublicApiSocketWsUrl,
 } from "@/lib/runtime-config";
 
 export const MARKET_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"] as const;
@@ -151,6 +152,7 @@ export interface MarketRecentTradesResponse {
 
 interface MarketsSocketHandlers {
   onConnect?: (connected: boolean) => void;
+  onConnectionStateChange?: (state: MarketsSocketState) => void;
   onTicker?: (ticker: MarketTickerSnapshot) => void;
   onCandle?: (candle: MarketCandle) => void;
   onOrderBook?: (orderBook: MarketOrderBookSnapshot) => void;
@@ -161,8 +163,19 @@ interface MarketsSocketHandlers {
   onTradesBootstrap?: (payload: { symbol: string; trades: MarketRecentTrade[] }) => void;
 }
 
+export type MarketsSocketState = "connecting" | "live" | "reconnecting" | "offline";
+
 function getSocketBaseUrl() {
+  const normalizedSocketUrl = normalizeApiBase(API_SOCKET_URL);
+  if (normalizedSocketUrl) {
+    return removeApiSuffix(normalizedSocketUrl);
+  }
+
   try {
+    const normalizedApiBaseUrl = normalizeApiBase(RESOLVED_API_BASE_URL);
+    if (normalizedApiBaseUrl) {
+      return removeApiSuffix(normalizedApiBaseUrl);
+    }
     return new URL(RESOLVED_API_BASE_URL).origin;
   } catch {
     return "http://localhost:4000";
@@ -352,7 +365,33 @@ function normalizeApiBase(value: string) {
 
 function removeApiSuffix(value: string) {
   const normalized = normalizeApiBase(value);
-  return normalized.endsWith("/api") ? normalized.slice(0, -4) : normalized;
+  if (!normalized) return "";
+
+  if (isAbsoluteHttpUrl(normalized)) {
+    try {
+      const parsed = new URL(normalized);
+      let pathname = parsed.pathname.replace(/\/+$/, "");
+      while (pathname.toLowerCase().endsWith("/api")) {
+        pathname = pathname.slice(0, -4);
+      }
+      parsed.pathname = pathname || "/";
+      parsed.search = "";
+      parsed.hash = "";
+      return trimTrailingSlash(parsed.toString());
+    } catch {
+      // Fall back to the string strategy below when URL parsing fails.
+    }
+  }
+
+  let stripped = normalized;
+  while (stripped.toLowerCase().endsWith("/api")) {
+    stripped = stripped.slice(0, -4);
+  }
+  return stripped;
+}
+
+function isAbsoluteHttpUrl(value: string) {
+  return value.startsWith("http://") || value.startsWith("https://");
 }
 
 type LocalOrderBookNumericLevel = {
@@ -713,13 +752,74 @@ export const marketsService = {
   },
 
   connectSocket(handlers: MarketsSocketHandlers) {
-    const socket = io(`${getSocketBaseUrl()}/markets`, {
-      transports: ["websocket"],
-      timeout: 8_000,
+    const socketBaseUrl = getSocketBaseUrl();
+    const resolvedSocketUrl = `${socketBaseUrl}/markets`;
+    const socket = io(resolvedSocketUrl, {
+      transports: ["websocket", "polling"],
+      timeout: 10_000,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1_000,
+      reconnectionDelayMax: 10_000,
+      randomizationFactor: 0.35,
+      autoConnect: true,
+      withCredentials: true,
     } as any) as any;
 
-    socket.on("connect", () => handlers.onConnect?.(true));
-    socket.on("disconnect", () => handlers.onConnect?.(false));
+    const setConnectionState = (state: MarketsSocketState) => {
+      handlers.onConnectionStateChange?.(state);
+    };
+
+    setConnectionState("connecting");
+
+    socket.on("connect", () => {
+      handlers.onConnect?.(true);
+      setConnectionState("live");
+
+      if (process.env.NODE_ENV !== "production") {
+        const engineProtocol = socket.io?.engine?.protocol;
+        const transportName = socket.io?.engine?.transport?.name;
+        const parsedClientVersion = String((io as unknown as { protocol?: unknown }).protocol ?? "unknown");
+        if (Number(engineProtocol) !== 4) {
+          console.warn("[markets.socket] socket.io compatibility check", {
+            expectedProtocol: 4,
+            actualProtocol: engineProtocol,
+            clientProtocol: parsedClientVersion,
+            resolvedSocketUrl,
+            resolvedSocketBaseUrl: socketBaseUrl,
+            resolvedSocketWsUrl: resolvedPublicApiSocketWsUrl,
+            transport: transportName,
+          });
+        }
+      }
+    });
+
+    socket.on("disconnect", (reason: string) => {
+      handlers.onConnect?.(false);
+      setConnectionState(reason === "io client disconnect" ? "offline" : "reconnecting");
+    });
+    socket.on("connect_error", (error: Error) => {
+      setConnectionState("reconnecting");
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[markets.socket] connect_error", {
+          message: error.message,
+          resolvedSocketUrl,
+          resolvedSocketBaseUrl: socketBaseUrl,
+          resolvedSocketWsUrl: resolvedPublicApiSocketWsUrl,
+        });
+      }
+    });
+    socket.io.on("reconnect_attempt", () => {
+      setConnectionState("reconnecting");
+    });
+    socket.io.on("reconnect_failed", () => {
+      setConnectionState("offline");
+    });
+    socket.io.on("reconnect", () => {
+      handlers.onConnect?.(true);
+      setConnectionState("live");
+    });
+
     socket.on("market:ticker", (ticker: MarketTickerSnapshot) => handlers.onTicker?.(ticker));
     socket.on("market:candle", (candle: MarketCandle) => handlers.onCandle?.(candle));
     socket.on("market:orderbook", (orderBook: MarketOrderBookSnapshot) =>
@@ -772,6 +872,7 @@ export const marketsService = {
         socket.emit("market:trades:unwatch", { symbol });
       },
       disconnect() {
+        setConnectionState("offline");
         socket.disconnect();
       },
     };

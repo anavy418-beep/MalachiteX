@@ -6,7 +6,7 @@ import { CandlestickChart } from "@/components/markets/candlestick-chart";
 import type { MarketCandle } from "@/services/markets.service";
 import type { CandlestickData, HistogramData, UTCTimestamp } from "lightweight-charts";
 
-type StreamState = "LIVE" | "RECONNECTING" | "DELAYED";
+type StreamState = "LIVE" | "POLLING" | "RECONNECTING" | "DELAYED";
 
 interface LightweightMarketChartProps {
   candles: MarketCandle[];
@@ -272,6 +272,8 @@ export function LightweightMarketChart({
             "rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.18em]",
             streamState === "LIVE"
               ? "border-emerald-700/40 bg-emerald-950/30 text-emerald-200"
+              : streamState === "POLLING"
+                ? "border-sky-700/50 bg-sky-500/10 text-sky-200"
               : "border-amber-700/40 bg-amber-500/10 text-amber-200",
           )}
         >

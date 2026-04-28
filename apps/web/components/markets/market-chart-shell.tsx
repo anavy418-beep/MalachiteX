@@ -5,7 +5,7 @@ import { LightweightMarketChart } from "@/components/markets/lightweight-market-
 import type { MarketCandle } from "@/services/markets.service";
 
 type ChartProvider = "native" | "lightweight" | "tradingview";
-type StreamState = "LIVE" | "RECONNECTING" | "DELAYED";
+type StreamState = "LIVE" | "POLLING" | "RECONNECTING" | "DELAYED";
 
 export function MarketChartShell({
   candles,
